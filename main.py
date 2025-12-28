@@ -274,6 +274,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _shutdown_event.set()
     cleanup_stop.set()
     scheduler_stop.set()
+    transcoding.shutdown()
 
 
 app = FastAPI(title="neTV", lifespan=lifespan)

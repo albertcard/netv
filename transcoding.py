@@ -195,6 +195,16 @@ def init(load_settings: Callable[[], dict[str, Any]]) -> None:
     _load_series_probe_cache()
 
 
+def shutdown() -> None:
+    """Kill all running ffmpeg processes for clean shutdown."""
+    with _transcode_lock:
+        for session_id, session in list(_transcode_sessions.items()):
+            proc = session.get("process")
+            if proc and _kill_process(proc):
+                log.info("Shutdown: killed ffmpeg for session %s", session_id)
+        _transcode_sessions.clear()
+
+
 @dataclass(slots=True)
 class SubtitleStream:
     index: int
