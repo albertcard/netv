@@ -1,0 +1,555 @@
+{% extends "base.html" %}
+{% block title %}Settings - neTV{% endblock %}
+
+{% block head_extra %}
+<style>
+@keyframes spin { to { transform: rotate(360deg); } }
+.refresh-btn.active { background-color: rgb(37, 99, 235); pointer-events: none; }
+.refresh-btn .spinner { display: none; width: 0.75em; height: 0.75em; border: 2px solid white; border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite; margin-right: 0.25em; }
+.refresh-btn.active .spinner { display: inline-block; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="max-w-2xl">
+  <h2 class="text-3xl font-bold mb-6">Settings</h2>
+
+  <h3 class="text-lg text-gray-400 mb-3">Browser Settings</h3>
+
+  <!-- Live TV Category Filter -->
+  <div id="filters" class="mb-8 p-4 bg-gray-800 rounded">
+    <h3 class="text-xl font-semibold mb-4">Live TV Filter</h3>
+    <p class="text-sm text-gray-400 mb-4">Select and order which channel categories appear in the Live TV guide</p>
+    <div class="grid grid-cols-2 gap-4">
+      <div>
+        <div class="text-sm text-gray-400 mb-2">Available (drag to select →)</div>
+        <input type="text" id="cat-search" placeholder="Search..."
+               class="w-full mb-2 px-3 py-1 bg-gray-700 rounded text-sm focus:outline-none focus:ring-1 focus:ring-blue-500">
+        <div id="available-cats" class="h-64 overflow-auto space-y-1 bg-gray-900 rounded p-2">
+          {% for cat in live_categories %}
+          <div class="cat-item px-2 py-1 rounded cursor-move hover:bg-gray-700 text-sm truncate"
+               draggable="true" data-id="{{ cat.category_id }}" title="{{ cat.category_name }}">
+            {{ cat.category_name }}
+          </div>
+          {% endfor %}
+        </div>
+      </div>
+      <div>
+        <div class="text-sm text-gray-400 mb-2">Selected (drag to reorder)</div>
+        <div class="h-[calc(2rem+1px)]"></div>
+        <div id="selected-cats" class="h-64 overflow-auto space-y-1 bg-gray-900 rounded p-2 border-2 border-dashed border-gray-700">
+          <div id="drop-hint" class="text-gray-500 text-sm text-center py-4">Drop categories here</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Closed Captions settings -->
+  <div id="captions" class="mb-8 p-4 bg-gray-800 rounded">
+    <h3 class="text-xl font-semibold mb-4">Closed Captions</h3>
+    <div class="mb-4">
+      <label class="flex items-center gap-3 cursor-pointer">
+        <input type="checkbox" name="captions_enabled" id="captions-enabled" {% if captions_enabled %}checked{% endif %}
+               class="w-5 h-5 rounded bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+        <span>Enable closed captions by default</span>
+      </label>
+    </div>
+
+    <div class="mb-4">
+      <label class="block text-sm mb-2">Preferred Caption Language</label>
+      <select id="cc-lang-pref" class="px-3 py-1.5 bg-gray-700 rounded text-sm">
+        <option value="">Any (first available)</option>
+        <option value="en">English</option>
+        <option value="es">Spanish</option>
+        <option value="fr">French</option>
+        <option value="de">German</option>
+        <option value="it">Italian</option>
+        <option value="pt">Portuguese</option>
+        <option value="ja">Japanese</option>
+        <option value="ko">Korean</option>
+        <option value="zh">Chinese</option>
+      </select>
+    </div>
+
+    <div class="grid grid-cols-2 gap-3 mb-4">
+      <div>
+        <label class="block text-sm mb-1">Font Size</label>
+        <select class="cc-setting w-full px-2 py-1 bg-gray-700 rounded text-sm" data-setting="cc_size">
+          <option value="0.7em">Very Small</option>
+          <option value="0.85em">Small</option>
+          <option value="1em">Medium</option>
+          <option value="1.25em">Large</option>
+          <option value="1.5em">Very Large</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm mb-1">Font</label>
+        <select class="cc-setting w-full px-2 py-1 bg-gray-700 rounded text-sm" data-setting="cc_font">
+          <option value="inherit">Default</option>
+          <option value="monospace">Monospace</option>
+          <option value="serif">Serif</option>
+          <option value="sans-serif">Sans-Serif</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm mb-1">Text Color</label>
+        <select class="cc-setting w-full px-2 py-1 bg-gray-700 rounded text-sm" data-setting="cc_color">
+          <option value="#ffffff">White</option>
+          <option value="#ffff00">Yellow</option>
+          <option value="#00ff00">Green</option>
+          <option value="#00ffff">Cyan</option>
+          <option value="#ff00ff">Magenta</option>
+          <option value="#ff0000">Red</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm mb-1">Text Shadow</label>
+        <select class="cc-setting w-full px-2 py-1 bg-gray-700 rounded text-sm" data-setting="cc_shadow">
+          <option value="0 0 4px black, 0 0 4px black">Drop Shadow</option>
+          <option value="2px 2px 0 black">Raised</option>
+          <option value="-1px -1px 0 black, 1px -1px 0 black, -1px 1px 0 black, 1px 1px 0 black">Outline</option>
+          <option value="none">None</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm mb-1">Background Color</label>
+        <select class="cc-setting w-full px-2 py-1 bg-gray-700 rounded text-sm" data-setting="cc_bg">
+          <option value="#000000">Black</option>
+          <option value="#333333">Dark Gray</option>
+          <option value="transparent">Transparent</option>
+        </select>
+      </div>
+      <div>
+        <label class="block text-sm mb-1">Background Opacity</label>
+        <select class="cc-setting w-full px-2 py-1 bg-gray-700 rounded text-sm" data-setting="cc_bg_opacity">
+          <option value="1">100%</option>
+          <option value="0.75">75%</option>
+          <option value="0.5">50%</option>
+          <option value="0.25">25%</option>
+          <option value="0">0%</option>
+        </select>
+      </div>
+    </div>
+
+    <div class="p-4 rounded text-center" style="background-image: linear-gradient(45deg, #444 25%, transparent 25%), linear-gradient(-45deg, #444 25%, transparent 25%), linear-gradient(45deg, transparent 75%, #444 75%), linear-gradient(-45deg, transparent 75%, #444 75%); background-size: 16px 16px; background-position: 0 0, 0 8px, 8px -8px, -8px 0;">
+      <span class="py-0.5 px-1 inline-block" id="cc-preview">Sample Caption Text</span>
+    </div>
+    <p class="text-xs text-gray-500 mt-2">
+      Also: <code id="chrome-cc-link" class="bg-gray-700 px-1 rounded cursor-pointer hover:bg-gray-600" title="Click to copy">chrome://settings/captions</code>
+    </p>
+  </div>
+
+  <h3 class="text-lg text-gray-400 mb-3 mt-8">Server Settings</h3>
+
+  <!-- Users management -->
+  <div id="users" class="mb-8 p-4 bg-gray-800 rounded">
+    <h3 class="text-xl font-semibold mb-4">Users</h3>
+    {% if all_users %}
+    <div class="space-y-2 mb-4">
+      {% for u in all_users %}
+      <details class="bg-gray-700 rounded group" data-username="{{ u.username }}">
+        <summary class="flex items-center justify-between p-2 cursor-pointer hover:bg-gray-600 rounded">
+          <div class="flex items-center gap-2">
+            <span class="font-medium">{{ u.username }}</span>
+            {% if u.username == current_user %}<span class="text-xs text-gray-400">(you)</span>{% endif %}
+            {% if u.admin %}<span class="text-xs px-1.5 py-0.5 bg-blue-600 rounded">admin</span>{% endif %}
+          </div>
+          <span class="text-gray-400 text-xs group-open:hidden">Edit</span>
+        </summary>
+        <div class="p-3 pt-1 border-t border-gray-600 space-y-3">
+          {% if is_admin and all_users|length > 1 %}
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="checkbox" class="admin-toggle w-4 h-4 rounded bg-gray-600 border-gray-500 text-blue-500" {% if u.admin %}checked{% endif %}>
+            <span class="text-sm">Admin privileges</span>
+          </label>
+          {% endif %}
+          <form class="password-form flex gap-2 items-end flex-wrap">
+            <div>
+              <label class="block text-xs text-gray-400 mb-1">New Password</label>
+              <div class="relative">
+                <input type="password" name="new_password" required class="w-36 px-2 py-1 pr-8 text-sm bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                <button type="button" onclick="togglePwdVis(this)" class="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white">
+                  <svg class="w-4 h-4 eye-off" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
+                  <svg class="w-4 h-4 eye-on hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                </button>
+              </div>
+            </div>
+            <button type="submit" class="px-2 py-1 text-sm bg-blue-600 hover:bg-blue-700 rounded">Save</button>
+            <span class="password-msg text-sm hidden"></span>
+          </form>
+          <div class="flex justify-end">
+            {% if u.username == current_user %}
+            <button type="button" class="px-2 py-1 text-xs bg-red-600 hover:bg-red-700 rounded" onclick="showDeleteSelfModal()">Delete Account</button>
+            {% elif is_admin %}
+            <form action="/settings/users/delete/{{ u.username }}" method="POST">
+              <button type="submit" class="px-2 py-1 text-xs bg-red-600 hover:bg-red-700 rounded" onclick="return confirm('Delete user {{ u.username }}?')">Delete</button>
+            </form>
+            {% endif %}
+          </div>
+        </div>
+      </details>
+      {% endfor %}
+    </div>
+    {% endif %}
+    {% if is_admin %}
+    <div class="p-3 bg-gray-700 rounded">
+      <h4 class="text-sm font-medium mb-2">Add User</h4>
+      <form id="add-user-form" class="flex gap-2 items-end flex-wrap">
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">Username</label>
+          <input type="text" name="username" required class="w-32 px-2 py-1 text-sm bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-xs text-gray-400 mb-1">Password</label>
+          <div class="relative">
+            <input type="password" name="password" required class="w-32 px-2 py-1 pr-8 text-sm bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <button type="button" onclick="togglePwdVis(this)" class="absolute right-1.5 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white">
+              <svg class="w-4 h-4 eye-off" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
+              <svg class="w-4 h-4 eye-on hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+            </button>
+          </div>
+        </div>
+        <button type="submit" class="px-3 py-1 text-sm bg-blue-600 hover:bg-blue-700 rounded">Add</button>
+        <span id="add-user-msg" class="text-sm hidden"></span>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+
+  <!-- Transcoding settings -->
+  <div id="transcoding" class="mb-8 p-4 bg-gray-800 rounded">
+    <h3 class="text-xl font-semibold mb-4">Transcoding</h3>
+    <div class="space-y-4" id="transcode-settings">
+      <div>
+        <label class="block text-sm font-medium mb-2">Mode</label>
+        <div class="flex gap-4">
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="transcode_mode" value="auto" {% if transcode_mode == 'auto' %}checked{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>Auto</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="transcode_mode" value="always" {% if transcode_mode == 'always' %}checked{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>Always</span>
+          </label>
+          <label class="flex items-center gap-2 cursor-pointer">
+            <input type="radio" name="transcode_mode" value="never" {% if transcode_mode == 'never' %}checked{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>Never</span>
+          </label>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">Auto transcodes when browser can't play the format natively</p>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-2">Hardware Acceleration</label>
+        <div class="flex gap-4 flex-wrap">
+          <label class="flex items-center gap-2 {% if not available_encoders.nvidia %}opacity-40{% endif %}">
+            <input type="radio" name="transcode_hw" value="nvidia" {% if transcode_hw == 'nvidia' %}checked{% endif %}
+                   {% if not available_encoders.nvidia %}disabled{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>NVIDIA</span>
+          </label>
+          <label class="flex items-center gap-2 {% if not available_encoders.vaapi %}opacity-40{% endif %}">
+            <input type="radio" name="transcode_hw" value="vaapi" {% if transcode_hw == 'vaapi' %}checked{% endif %}
+                   {% if not available_encoders.vaapi %}disabled{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>VA-API</span>
+          </label>
+          <label class="flex items-center gap-2 {% if not available_encoders.qsv %}opacity-40{% endif %}">
+            <input type="radio" name="transcode_hw" value="qsv" {% if transcode_hw == 'qsv' %}checked{% endif %}
+                   {% if not available_encoders.qsv %}disabled{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>Intel QSV</span>
+          </label>
+          <label class="flex items-center gap-2 {% if not available_encoders.software %}opacity-40{% endif %}">
+            <input type="radio" name="transcode_hw" value="software" {% if transcode_hw == 'software' %}checked{% endif %}
+                   {% if not available_encoders.software %}disabled{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>Software</span>
+          </label>
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-2">Max Transcode Resolution</label>
+        <div class="flex gap-4 flex-wrap">
+          <label class="flex items-center gap-2">
+            <input type="radio" name="max_resolution" value="4k" {% if max_resolution == '4k' %}checked{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>4K</span>
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="radio" name="max_resolution" value="1080p" {% if max_resolution in ('1080p', 'source') or not max_resolution %}checked{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>1080p</span>
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="radio" name="max_resolution" value="720p" {% if max_resolution == '720p' %}checked{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>720p</span>
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="radio" name="max_resolution" value="480p" {% if max_resolution == '480p' %}checked{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+            <span>480p</span>
+          </label>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">Limit output resolution (lower = faster, more compatible)</p>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-2">Max Bitrate (Mbps)</label>
+        <input type="number" name="max_bitrate_mbps" id="max-bitrate" value="{% if max_bitrate_mbps %}{{ '%g' % max_bitrate_mbps }}{% endif %}"
+               min="0" max="100" step="0.5" placeholder="auto"
+               class="setting-input w-32 px-3 py-2 bg-gray-700 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+        <p class="text-xs text-gray-400 mt-1">0 or blank = unlimited (copy if compatible). Transcode if source exceeds this.</p>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-2">VOD Transcode Cache (minutes)</label>
+        <input type="number" name="vod_transcode_cache_mins" value="{{ vod_transcode_cache_mins }}"
+               min="0" max="1440" step="5"
+               class="setting-input w-32 px-3 py-2 bg-gray-700 rounded focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm">
+        <p class="text-xs text-gray-400 mt-1">Keep transcoded VOD for reuse (0 = disabled)</p>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-2">Probe Media (detect codecs/subs)</label>
+        <div class="flex gap-4">
+          <label class="flex items-center gap-2">
+            <input type="checkbox" name="probe_movies" {% if probe_movies %}checked{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500 rounded">
+            <span>Movies</span>
+          </label>
+          <label class="flex items-center gap-2">
+            <input type="checkbox" name="probe_series" {% if probe_series %}checked{% endif %}
+                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500 rounded">
+            <span>Series</span>
+          </label>
+        </div>
+        <p class="text-xs text-gray-400 mt-1">Probing adds ~8s delay on first play but enables better transcoding decisions. Results are cached.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Probe Cache -->
+  <div id="probe-cache" class="mb-8 p-4 bg-gray-800 rounded">
+    <div class="flex items-center justify-between mb-4">
+      <h3 class="text-xl font-semibold">Probe Cache</h3>
+      <button id="clear-all-probe-cache" class="px-2 py-1 text-xs bg-gray-600 hover:bg-red-600 rounded">Clear All</button>
+    </div>
+    <p class="text-sm text-gray-400 mb-4">Cached probe results avoid re-probing episodes in the same series.</p>
+    <div id="probe-cache-list" class="space-y-2 max-h-96 overflow-y-auto">
+      <div class="text-gray-500 text-sm">Loading...</div>
+    </div>
+  </div>
+
+  <!-- Sources -->
+  <div id="sources" class="mb-8 p-4 bg-gray-800 rounded">
+    <h3 class="text-xl font-semibold mb-4">Sources</h3>
+    {% if sources %}
+    <div class="space-y-3 mb-4">
+      {% for source in sources %}
+      <details class="bg-gray-700 rounded group">
+        <summary class="flex items-center justify-between p-3 cursor-pointer hover:bg-gray-600 rounded">
+          <div>
+            <span class="font-medium">{{ source.name }}</span>
+            <span class="ml-2 px-2 py-0.5 text-xs bg-gray-600 rounded">{{ source.type }}</span>
+            <div class="text-sm text-gray-400 truncate max-w-md">{{ source.url }}</div>
+          </div>
+          <span class="text-gray-400 text-sm group-open:hidden">Edit</span>
+        </summary>
+        <form action="/settings/edit/{{ source.id }}" method="POST" class="p-3 pt-0 space-y-3 border-t border-gray-600">
+          <div class="grid grid-cols-2 gap-3">
+            <div>
+              <label class="block text-sm font-medium mb-1">Name</label>
+              <input type="text" name="name" value="{{ source.name }}" required
+                     class="w-full px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1">Type</label>
+              <select name="source_type" onchange="toggleSourceFields(this)"
+                      class="w-full px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                <option value="xtream" {% if source.type == 'xtream' %}selected{% endif %}>Xtream API</option>
+                <option value="m3u" {% if source.type == 'm3u' %}selected{% endif %}>M3U Playlist</option>
+                <option value="epg" {% if source.type == 'epg' %}selected{% endif %}>EPG Only</option>
+              </select>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">URL</label>
+            <input type="url" name="url" value="{{ source.url }}" required
+                   class="w-full px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+          </div>
+          <div class="non-epg-only" style="{% if source.type == 'epg' %}display:none{% endif %}">
+            <label class="flex items-center gap-2 cursor-pointer">
+              <input type="checkbox" name="epg_enabled" {% if source.epg_enabled is not defined or source.epg_enabled %}checked{% endif %}
+                     class="w-4 h-4 rounded bg-gray-600 border-gray-500 text-blue-500 focus:ring-blue-500">
+              <span class="text-sm">Fetch EPG from this source</span>
+            </label>
+          </div>
+          <div class="grid grid-cols-2 gap-3 xtream-fields" style="{% if source.type != 'xtream' %}display:none{% endif %}">
+            <div>
+              <label class="block text-sm font-medium mb-1">Username</label>
+              <input type="text" name="username" value="{{ source.username }}"
+                     class="w-full px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            </div>
+            <div>
+              <label class="block text-sm font-medium mb-1">Password</label>
+              <div class="relative">
+                <input type="password" name="password" value="{{ source.password }}"
+                       class="w-full px-3 py-1.5 pr-9 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+                <button type="button" onclick="togglePwdVis(this)" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white">
+                  <svg class="w-5 h-5 eye-off" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
+                  <svg class="w-5 h-5 eye-on hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+                </button>
+              </div>
+            </div>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">EPG Timeout (seconds)</label>
+            <input type="number" name="epg_timeout" value="{{ source.epg_timeout|default(120) }}" min="1" max="3600"
+                   class="w-32 px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <span class="text-xs text-gray-400 ml-2">1-3600s (default: 120)</span>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">EPG Schedule</label>
+            <input type="text" name="epg_schedule" value="{{ source.epg_schedule|default([])|join(', ') }}"
+                   placeholder="03:00, 15:00"
+                   class="w-48 px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <span class="text-xs text-gray-400 ml-2">Times to auto-refresh (comma-separated HH:MM)</span>
+          </div>
+          <div class="epg-url-field" style="{% if source.type == 'epg' %}display:none{% endif %}">
+            <label class="block text-sm font-medium mb-1">EPG URL</label>
+            <input type="text" name="epg_url" value="{{ source.epg_url|default('') }}"
+                   placeholder="http://example.com/epg.xml"
+                   class="w-full px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none text-sm">
+            <span class="text-xs text-gray-400">Auto-detected on first refresh, or set manually</span>
+          </div>
+          <div>
+            <label class="block text-sm font-medium mb-1">Refresh</label>
+            <div class="flex gap-2" data-source-id="{{ source.id }}" data-source-type="{{ source.type }}">
+              {% if source.type == 'xtream' %}
+              <button type="button" class="refresh-btn px-2 py-1 text-xs bg-gray-600 hover:bg-gray-500 rounded" data-refresh="epg"><span class="spinner"></span><span class="label">EPG</span></button>
+              <button type="button" class="refresh-btn px-2 py-1 text-xs bg-gray-600 hover:bg-gray-500 rounded" data-refresh="live"><span class="spinner"></span><span class="label">Live</span></button>
+              <button type="button" class="refresh-btn px-2 py-1 text-xs bg-gray-600 hover:bg-gray-500 rounded" data-refresh="vod"><span class="spinner"></span><span class="label">VOD</span></button>
+              {% elif source.type == 'm3u' %}
+              <button type="button" class="refresh-btn px-2 py-1 text-xs bg-gray-600 hover:bg-gray-500 rounded" data-refresh="epg"><span class="spinner"></span><span class="label">EPG</span></button>
+              <button type="button" class="refresh-btn px-2 py-1 text-xs bg-gray-600 hover:bg-gray-500 rounded" data-refresh="m3u"><span class="spinner"></span><span class="label">M3U</span></button>
+              {% elif source.type == 'epg' %}
+              <button type="button" class="refresh-btn px-2 py-1 text-xs bg-gray-600 hover:bg-gray-500 rounded" data-refresh="epg"><span class="spinner"></span><span class="label">EPG</span></button>
+              {% endif %}
+            </div>
+          </div>
+          <div class="flex gap-2">
+            <button type="submit" class="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 rounded text-sm">Save</button>
+            <button type="button" onclick="this.closest('details').open=false"
+                    class="px-3 py-1.5 bg-gray-500 hover:bg-gray-400 rounded text-sm">Cancel</button>
+            <button type="submit" formaction="/settings/delete/{{ source.id }}"
+                    class="ml-auto px-3 py-1.5 bg-red-600 hover:bg-red-700 rounded text-sm"
+                    onclick="return confirm('Delete this source?')">Delete</button>
+          </div>
+        </form>
+      </details>
+      {% endfor %}
+    </div>
+    {% endif %}
+    <div class="p-4 bg-gray-700 rounded">
+    <h4 class="text-sm font-medium mb-3">Add Source</h4>
+    <form action="/settings/add" method="POST" class="space-y-3" id="add-source-form">
+      <div class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium mb-1">Name</label>
+          <input type="text" name="name" required placeholder="My IPTV"
+                 class="w-full px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Type</label>
+          <select name="source_type" id="source-type"
+                  class="w-full px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <option value="xtream">Xtream API</option>
+            <option value="m3u">M3U Playlist</option>
+            <option value="epg">EPG Only</option>
+          </select>
+        </div>
+      </div>
+      <div>
+        <label class="block text-sm font-medium mb-1">URL</label>
+        <input type="url" name="url" required placeholder="https://server.com"
+               class="w-full px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+      </div>
+      <div id="epg-enabled-field">
+        <label class="flex items-center gap-2 cursor-pointer">
+          <input type="checkbox" name="epg_enabled" checked
+                 class="w-4 h-4 rounded bg-gray-600 border-gray-500 text-blue-500 focus:ring-blue-500">
+          <span class="text-sm">Fetch EPG from this source</span>
+        </label>
+      </div>
+      <div id="xtream-fields" class="grid grid-cols-2 gap-3">
+        <div>
+          <label class="block text-sm font-medium mb-1">Username</label>
+          <input type="text" name="username" placeholder="username"
+                 class="w-full px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">Password</label>
+          <div class="relative">
+            <input type="password" name="password" placeholder="password"
+                   class="w-full px-3 py-1.5 pr-9 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+            <button type="button" onclick="togglePwdVis(this)" class="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-white">
+              <svg class="w-5 h-5 eye-off" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.875 18.825A10.05 10.05 0 0112 19c-4.478 0-8.268-2.943-9.543-7a9.97 9.97 0 011.563-3.029m5.858.908a3 3 0 114.243 4.243M9.878 9.878l4.242 4.242M9.88 9.88l-3.29-3.29m7.532 7.532l3.29 3.29M3 3l3.59 3.59m0 0A9.953 9.953 0 0112 5c4.478 0 8.268 2.943 9.543 7a10.025 10.025 0 01-4.132 5.411m0 0L21 21"/></svg>
+              <svg class="w-5 h-5 eye-on hidden" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="grid grid-cols-2 gap-4">
+        <div>
+          <label class="block text-sm font-medium mb-1">EPG Timeout (seconds)</label>
+          <input type="number" name="epg_timeout" value="120" min="1" max="3600"
+                 class="w-32 px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+          <span class="text-xs text-gray-400 ml-2">1-3600s</span>
+        </div>
+        <div>
+          <label class="block text-sm font-medium mb-1">EPG Schedule</label>
+          <input type="text" name="epg_schedule" placeholder="03:00, 15:00"
+                 class="w-48 px-3 py-1.5 bg-gray-600 rounded focus:ring-2 focus:ring-blue-500 focus:outline-none">
+          <span class="text-xs text-gray-400 ml-2">HH:MM times</span>
+        </div>
+      </div>
+      <button type="submit" class="px-4 py-1.5 bg-blue-600 hover:bg-blue-700 rounded">Add</button>
+    </form>
+    </div>
+  </div>
+</div>
+
+<!-- Delete Self Modal -->
+<div id="delete-self-modal" class="hidden fixed inset-0 bg-black/70 flex items-center justify-center z-50">
+  <div class="bg-gray-800 rounded-lg p-6 max-w-sm w-full mx-4">
+    <h3 class="text-lg font-semibold mb-4">Delete Your Account</h3>
+    <p class="text-sm text-gray-400 mb-4">Enter your password to confirm account deletion. This cannot be undone.</p>
+    <form id="delete-self-form" onsubmit="submitDeleteSelf(event); return false;">
+      <input type="password" id="delete-self-password" placeholder="Password" required
+             class="w-full px-3 py-2 bg-gray-700 rounded mb-2 focus:outline-none focus:ring-1 focus:ring-red-500">
+      <div id="delete-self-msg" class="text-red-400 text-sm mb-2"></div>
+      <div class="flex gap-3 justify-end">
+        <button type="button" onclick="hideDeleteSelfModal()" class="px-4 py-2 bg-gray-600 hover:bg-gray-500 rounded">Cancel</button>
+        <button type="submit" class="px-4 py-2 bg-red-600 hover:bg-red-700 rounded">Delete</button>
+      </div>
+    </form>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+window.SETTINGS_CONFIG = {
+  currentUser: {{ current_user | tojson }},
+  selectedCats: {{ selected_cats | tojson }},
+  catNames: {
+    {% for cat in live_categories %}{{ cat.category_id | tojson }}: {{ cat.category_name | tojson }}{% if not loop.last %},{% endif %}
+    {% endfor %}
+  },
+  ccStyle: {{ cc_style | tojson }},
+  ccLang: {{ cc_lang | tojson }}
+};
+</script>
+<script src="/static/js/settings.js"></script>
+{% endblock %}

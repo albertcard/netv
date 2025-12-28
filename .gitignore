@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.ruff_cache/
+.pytest_cache/
+
+# UV
+uv.lock
+
+# App data
+settings.json
+cache/
+
+# Certificates
+*.pem
+
+# Tools - user data and generated files
+tools/xtream.json
+tools/*.m3u
+tools/*.pickle.gz
+tools/authentication.json
+tools/get_*.json
+tools/xmltv.xml
+tools/.zap2xml/
