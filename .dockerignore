@@ -24,6 +24,7 @@ conftest.py
 
 # Docs
 *.md
+!README.md
 screenshots/
 LICENSE
 
