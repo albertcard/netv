@@ -803,8 +803,7 @@ def build_hls_ffmpeg_cmd(
     if user_agent:
         input_opts.extend(["-user_agent", user_agent])
     input_opts.extend(["-i", input_url])
-    cmd.extend(input_opts
-    )
+    cmd.extend(input_opts)
 
     for i, sub in enumerate(subtitles or []):
         cmd.extend(
@@ -1255,8 +1254,15 @@ async def _handle_existing_vod_session(
 
     media_info = probe_media(url)[0] if do_probe else None
     cmd = build_hls_ffmpeg_cmd(
-        url, hw, snap.output_dir, True, None, media_info, max_resolution, max_bitrate_mbps,
-        get_user_agent()
+        url,
+        hw,
+        snap.output_dir,
+        True,
+        None,
+        media_info,
+        max_resolution,
+        max_bitrate_mbps,
+        get_user_agent(),
     )
 
     i_idx = cmd.index("-i")
@@ -1371,8 +1377,15 @@ async def _do_start_transcode(
             )
 
     cmd = build_hls_ffmpeg_cmd(
-        url, hw, output_dir, is_vod, subtitles, media_info, max_resolution, max_bitrate_mbps,
-        get_user_agent()
+        url,
+        hw,
+        output_dir,
+        is_vod,
+        subtitles,
+        media_info,
+        max_resolution,
+        max_bitrate_mbps,
+        get_user_agent(),
     )
     if old_seek_offset > 0:
         i_idx = cmd.index("-i")
