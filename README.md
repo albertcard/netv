@@ -42,13 +42,24 @@ users who find them overkill and just want a simple IPTV player.
 - **Live TV** with EPG grid guide
 - **Movies & Series** with metadata, seasons, episodes
 - **Chromecast** support (HTTPS required)
-- **Hardware transcoding** (NVIDIA NVENC, Intel/AMD VA-API)
 - **Closed captions** with style customization
 - **Search** across all content (supports regex)
 - **Favorites** with drag-and-drop ordering
 - **Resume playback** for VOD content
 - **Responsive** - works on desktop, tablet, mobile
 - **Keyboard navigation** - 10-foot UI friendly
+
+### Transcoding
+
+Extensively optimized for minimal latency and CPU usage:
+
+- **Smart passthrough** - h264+aac streams remux without re-encoding (zero CPU)
+- **Full GPU pipeline** - NVDEC decode → NVENC/VAAPI encode, CPU stays idle
+- **Probe caching** - Streams probed once, series episodes share probe data
+- **Interlace detection** - Auto-deinterlaces OTA/cable, skips progressive
+- **Smart seeking** - Reuses segments for backward seeks, only transcodes gaps
+- **Session recovery** - VOD sessions survive restarts, resume where you left off
+- **HTTPS passthrough** - Auto-proxies HTTP streams when behind HTTPS
 
 ## Disclaimer
 
