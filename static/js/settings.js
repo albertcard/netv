@@ -358,25 +358,30 @@
     const container = document.getElementById('transcode-settings');
     if (!container) return;
 
+    // Collect all transcode-related inputs (in container + probe checkboxes + transcode_dir)
+    const transcodeInputs = [
+      ...container.querySelectorAll('.setting-input'),
+      ...document.querySelectorAll('input[name="probe_live"], input[name="probe_movies"], input[name="probe_series"]'),
+      document.querySelector('input[name="transcode_dir"]')
+    ].filter(Boolean);
+
     async function save(triggerEl) {
       const form = new FormData();
-      form.append('mode', container.querySelector('input[name="transcode_mode"]:checked')?.value || 'auto');
-      form.append('hw', container.querySelector('input[name="transcode_hw"]:checked')?.value || 'software');
-      form.append('max_resolution', container.querySelector('input[name="max_resolution"]:checked')?.value || '1080p');
-      form.append('quality', container.querySelector('input[name="quality"]:checked')?.value || 'high');
-      form.append('vod_transcode_cache_mins', container.querySelector('input[name="vod_transcode_cache_mins"]')?.value || '0');
-      if (document.querySelector('input[name="probe_live"]')?.checked) form.append('probe_live', 'on');
-      if (document.querySelector('input[name="probe_movies"]')?.checked) form.append('probe_movies', 'on');
-      if (document.querySelector('input[name="probe_series"]')?.checked) form.append('probe_series', 'on');
+      // Auto-collect all transcode inputs by type
+      transcodeInputs.forEach(el => {
+        if (!el.name) return;
+        if (el.type === 'checkbox') {
+          if (el.checked) form.append(el.name, 'on');
+        } else if (el.type === 'radio') {
+          if (el.checked) form.append(el.name, el.value);
+        } else {
+          form.append(el.name, el.value);
+        }
+      });
       await saveWithFeedback('/settings/transcode', { method: 'POST', body: form }, getFeedbackEl(triggerEl));
     }
 
-    container.querySelectorAll('.setting-input').forEach(el => {
-      el.addEventListener('change', function() { save(this); });
-    });
-
-    // Probe checkboxes (in probe-cache section)
-    document.querySelectorAll('input[name="probe_live"], input[name="probe_movies"], input[name="probe_series"]').forEach(el => {
+    transcodeInputs.forEach(el => {
       el.addEventListener('change', function() { save(this); });
     });
 

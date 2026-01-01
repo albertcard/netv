@@ -2264,21 +2264,30 @@ async def save_user_prefs(
 @app.post("/settings/transcode")
 async def settings_transcode(
     _user: Annotated[dict, Depends(require_admin)],
-    mode: Annotated[str, Form()],
-    hw: Annotated[str, Form()],
+    transcode_mode: Annotated[str, Form()],
+    transcode_hw: Annotated[str, Form()],
     max_resolution: Annotated[str, Form()] = "1080p",
     quality: Annotated[str, Form()] = "high",
     vod_transcode_cache_mins: Annotated[int, Form()] = 60,
+    live_transcode_cache_secs: Annotated[int, Form()] = 0,
+    live_dvr_mins: Annotated[int, Form()] = 0,
+    transcode_dir: Annotated[str, Form()] = "",
     probe_live: Annotated[str | None, Form()] = None,
     probe_movies: Annotated[str | None, Form()] = None,
     probe_series: Annotated[str | None, Form()] = None,
 ):
     settings = load_server_settings()
-    settings["transcode_mode"] = mode
-    settings["transcode_hw"] = hw
+    settings["transcode_mode"] = transcode_mode
+    settings["transcode_hw"] = transcode_hw
     settings["max_resolution"] = max_resolution
     settings["quality"] = quality if quality in ("high", "medium", "low") else "high"
     settings["vod_transcode_cache_mins"] = max(0, vod_transcode_cache_mins)
+    settings["live_transcode_cache_secs"] = max(0, live_transcode_cache_secs)
+    settings["live_dvr_mins"] = max(0, live_dvr_mins)
+    if transcode_dir:
+        settings["transcode_dir"] = transcode_dir
+    elif "transcode_dir" in settings:
+        del settings["transcode_dir"]  # Use default
     settings["probe_live"] = probe_live == "on"
     settings["probe_movies"] = probe_movies == "on"
     settings["probe_series"] = probe_series == "on"

@@ -419,8 +419,8 @@ class TestSettings:
         resp = auth_client.post(
             "/settings/transcode",
             data={
-                "mode": "auto",
-                "hw": "nvidia",
+                "transcode_mode": "auto",
+                "transcode_hw": "nvidia",
                 "vod_transcode_cache_mins": 60,
             },
         )
