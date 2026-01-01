@@ -255,7 +255,10 @@ ENV NETV_HTTPS=""
 ENV LOG_LEVEL=INFO
 
 # Run as non-root
-RUN useradd -m netv
+# Create render/video groups for Podman compatibility (needs group names to exist)
+RUN groupadd -r render 2>/dev/null || true && \
+    groupadd -r video 2>/dev/null || true && \
+    useradd -m -G render,video netv
 USER netv
 
 # Shell form for env var expansion; NETV_HTTPS=1 adds --https flag
