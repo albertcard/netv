@@ -42,29 +42,29 @@ How we compare:
 | | neTV | [nodecast-tv] | [Jellyfin] | [Emby] | [Plex] |
 |---|---|---|---|---|---|
 | **Focus** | IPTV | IPTV | General media | General media | General media |
-| **Xtream Codes** | ✅ Native | ✅ Native | ❌ No | ❌ No | ❌ No |
-| **M3U playlists** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ⚠️ Via [xTeVe] |
-| **XMLTV EPG** | ✅ URL or file | ⚠️ Via provider | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Local media** | ❌ No | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Live TV** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-| **VOD (movies/series)** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
-| **DVR recording** | ❌ No | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Pass |
-| **Catchup/timeshift** | ❌ No | ❌ No | ⚠️ Plugin | ⚠️ Plugin | ❌ No |
-| **Live rewind buffer** | ✅ Yes | ❌ No | ⚠️ Via DVR | ⚠️ Via DVR | ⚠️ Via DVR |
-| **Resume playback** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Multi-user** | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Xtream Codes** | ✅ Native | ✅ Native | ❌ | ❌ | ❌ |
+| **M3U playlists** | ✅ | ✅ | ✅ | ✅ | ⚠️ Via [xTeVe] |
+| **XMLTV EPG** | ✅ URL or file | ⚠️ Via provider | ✅ | ✅ | ✅ |
+| **Local media** | ❌ | ❌ | ✅ | ✅ | ✅ |
+| **Live TV** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **VOD (movies/series)** | ✅ | ✅ | ✅ | ✅ | ✅ |
+| **DVR recording** | ❌ | ❌ | ✅ | ✅ | ⚠️ Pass |
+| **Catchup/timeshift** | ❌ | ❌ | ⚠️ Plugin | ⚠️ Plugin | ❌ |
+| **Live rewind buffer** | ✅ | ❌ | ⚠️ Via DVR | ⚠️ Via DVR | ⚠️ Via DVR |
+| **Resume playback** | ✅ | ❌ | ✅ | ✅ | ✅ |
+| **Multi-user** | ✅ | ✅ | ✅ | ✅ | ✅ |
 | **User roles** | ⚠️ Admin/viewer | ⚠️ Admin/viewer | ✅ Granular | ✅ Granular | ✅ Granular |
-| **Stream limits** | ✅ Per-user, per-source | ❌ No | ⚠️ Per-user | ⚠️ Per-user | ⚠️ Per-user |
+| **Stream limits** | ✅ Per-user, per-source | ❌ | ⚠️ Per-user | ⚠️ Per-user | ⚠️ Per-user |
 | **Library permissions** | N/A | N/A | ✅ Per-library | ✅ Per-library | ✅ Per-library |
-| **Favorites** | ✅ Drag-and-drop | ✅ Yes | ✅ Yes | ✅ Yes | ✅ Yes |
+| **Favorites** | ✅ Drag-and-drop | ✅ | ✅ | ✅ | ✅ |
 | **Search** | ✅ Regex | ⚠️ Basic | ⚠️ Basic | ⚠️ Basic | ⚠️ Basic |
 | **Video transcoding** | ✅ Server | ❌ Browser decode | ✅ Server | ✅ Server | ✅ Server |
 | **Audio transcoding** | ✅ Server | ⚠️ Optional | ✅ Server | ✅ Server | ✅ Server |
-| **NVENC** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Pass |
-| **VAAPI** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Pass |
-| **QSV** | ✅ Yes | ❌ No | ✅ Yes | ✅ Yes | ⚠️ Pass |
-| **Stream passthrough** | ✅ Auto h264+aac | ✅ Always | ✅ Yes | ✅ Yes | ✅ Yes |
-| **Software fallback** | ✅ Yes | ❌ No (browser) | ✅ Yes | ✅ Yes | ✅ Yes |
+| **NVENC** | ✅ | ❌ | ✅ | ✅ | ⚠️ Pass |
+| **VAAPI** | ✅ | ❌ | ✅ | ✅ | ⚠️ Pass |
+| **QSV** | ✅ | ❌ | ✅ | ✅ | ⚠️ Pass |
+| **Stream passthrough** | ✅ Auto h264+aac | ✅ Always | ✅ | ✅ | ✅ |
+| **Software fallback** | ✅ | ❌ Browser | ✅ | ✅ | ✅ |
 | **Legacy GPU** | ✅ Any | ❌ No (browser) | ✅ Any | ✅ Any | ⚠️ Driver 450+ |
 | **Probe caching** | ✅ Dynamic | ❌ None | ⚠️ Upfront scan | ⚠️ Upfront scan | ⚠️ Upfront scan |
 | **Episode probe reuse** | ✅ Smart (MRU) | ❌ No | ⚠️ Per-file | ⚠️ Per-file | ⚠️ Per-file |
@@ -75,6 +75,7 @@ How we compare:
 | **Mobile apps** | ⚠️ Web only | ⚠️ Web only | ✅ Native | ✅ Native | ✅ Native |
 | **Subscription** | ✅ Free | ✅ Free | ✅ Free | ⚠️ Premiere | ⚠️ Pass |
 | **Setup complexity** | ✅ Minimal | ✅ Minimal | ⚠️ Moderate | ⚠️ Moderate | ⚠️ Moderate |
+| **License** | Apache 2.0 | MIT | GPL v2 | GPL v2 | Proprietary |
 | **Stack** | Python, FFmpeg | Node.js | .NET, FFmpeg | .NET, FFmpeg | Proprietary |
 
 [nodecast-tv]: https://github.com/technomancer702/nodecast-tv
