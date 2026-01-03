@@ -12,6 +12,7 @@ uv.lock
 
 # App data (user-specific)
 cache/
+.cache/
 settings.json
 *.pem
 

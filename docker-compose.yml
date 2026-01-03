@@ -4,10 +4,6 @@
 #   docker compose up -d                    # Auto-detects hardware (Intel/AMD)
 #   docker compose --profile nvidia up -d   # NVIDIA GPU
 #
-# Hardware acceleration is automatic if /dev/dri exists. If VAAPI shows
-# "unavailable" in settings, you may need to add your render group GID:
-#   stat -c 'RENDER_GID=%g' /dev/dri/renderD128 >> .env
-#
 # No GPU or /dev/dri? Comment out the 'devices' section below.
 #
 # Build:
@@ -33,9 +29,6 @@ services:
     # Hardware acceleration (Intel/AMD) - comment out if no /dev/dri
     devices:
       - /dev/dri:/dev/dri
-    # Uncomment if VAAPI unavailable (get GID: stat -c '%g' /dev/dri/renderD128)
-    # group_add:
-    #   - "REPLACE_WITH_GID"
 
   # NVIDIA GPU: docker compose --profile nvidia up -d
   netv-nvidia:

@@ -173,6 +173,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Python + runtime libraries for FFmpeg + VAAPI/QSV drivers
 # Use ldd /usr/local/bin/ffmpeg in builder to verify all deps are covered
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    gosu \
     python3 \
     python3-pip \
     # Core codec libs
@@ -248,18 +249,20 @@ RUN python3 -m pip install --no-cache-dir --break-system-packages .
 
 # Runtime config
 EXPOSE 8000
-VOLUME /app/cache
 
 ENV NETV_PORT=8000
 ENV NETV_HTTPS=""
 ENV LOG_LEVEL=INFO
 
-# Run as non-root
-# Create render/video groups for Podman compatibility (needs group names to exist)
-RUN groupadd -r render 2>/dev/null || true && \
-    groupadd -r video 2>/dev/null || true && \
-    useradd -m -G render,video netv
-USER netv
+# Create non-root user (entrypoint handles permissions and group membership)
+RUN useradd -m netv
 
-# Shell form for env var expansion; NETV_HTTPS=1 adds --https flag
-CMD python3 main.py --port ${NETV_PORT} ${NETV_HTTPS:+--https}
+# Copy entrypoint and set permissions
+COPY entrypoint.sh /app/
+RUN chmod +x /app/entrypoint.sh
+
+# Healthcheck (internal port is always 8000)
+HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
+    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=5)" || exit 1
+
+ENTRYPOINT ["/app/entrypoint.sh"]
