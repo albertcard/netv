@@ -25,6 +25,8 @@ services:
       - /etc/localtime:/etc/localtime:ro  # Use host timezone for EPG
       # For HTTPS, also mount your certificates:
       # - /etc/letsencrypt:/etc/letsencrypt:ro
+      # Use system RAM instead of using local storage to store transcodes
+      # - /dev/shm:/tmp
     restart: unless-stopped
     # Hardware acceleration (Intel/AMD) - comment out if no /dev/dri
     devices:
