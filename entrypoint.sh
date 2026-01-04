@@ -14,8 +14,8 @@ fi
 # Add netv user to render device group (for VAAPI hardware encoding)
 if [ -e /dev/dri/renderD128 ]; then
     RENDER_GID=$(stat -c '%g' /dev/dri/renderD128)
-    addgroup --gid "$RENDER_GID" hostrender 2>/dev/null || true
-    adduser netv hostrender 2>/dev/null || true
+    groupadd --gid "$RENDER_GID" hostrender 2>/dev/null || true
+    usermod -aG hostrender netv 2>/dev/null || true
 fi
 
 # Drop to netv user and run the app
