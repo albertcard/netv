@@ -345,6 +345,12 @@ We leave pronunciation and meaning as an exercise for your idiom:
 
 We will also accept a shrubbery. One that looks nice. And not too expensive.
 
+## Support
+
+If you find neTV useful, consider buying me a coffee:
+
+[![Buy Me a Coffee](https://img.shields.io/badge/Buy%20Me%20a%20Coffee-ffdd00?style=flat&logo=buy-me-a-coffee&logoColor=black)](https://buymeacoffee.com/jvdillon)
+
 ## License
 
 Apache License 2.0
