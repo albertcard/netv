@@ -1442,6 +1442,7 @@ async def search_page(
     live: bool = False,
     vod: bool = False,
     series: bool = False,
+    limit: int = 100,
 ):
     results: dict[str, list] = {"live": [], "vod": [], "series": []}
 
@@ -1481,9 +1482,11 @@ async def search_page(
                     get_cache()["live_categories"] = cats
                     get_cache()["live_streams"] = streams
                     get_cache()["epg_urls"] = epg_urls
-            results["live"] = [
-                s for s in get_cache()["live_streams"] if match_fn(s.get("name") or "")
-            ][:20]
+            matched = sorted(
+                [s for s in get_cache()["live_streams"] if match_fn(s.get("name") or "")],
+                key=lambda x: x.get("name", "").lower(),
+            )
+            results["live"] = matched[:limit] if limit else matched
 
         # Load VOD data (run in thread to avoid blocking)
         if vod:
@@ -1492,9 +1495,11 @@ async def search_page(
                 with get_cache_lock():
                     get_cache()["vod_categories"] = vod_cats
                     get_cache()["vod_streams"] = vod_streams
-            results["vod"] = [
-                s for s in get_cache()["vod_streams"] if match_fn(s.get("name") or "")
-            ][:20]
+            matched = sorted(
+                [s for s in get_cache()["vod_streams"] if match_fn(s.get("name") or "")],
+                key=lambda x: x.get("name", "").lower(),
+            )
+            results["vod"] = matched[:limit] if limit else matched
 
         # Load series data (run in thread to avoid blocking)
         if series:
@@ -1503,9 +1508,11 @@ async def search_page(
                 with get_cache_lock():
                     get_cache()["series_categories"] = series_cats
                     get_cache()["series"] = series_list
-            results["series"] = [s for s in get_cache()["series"] if match_fn(s.get("name") or "")][
-                :20
-            ]
+            matched = sorted(
+                [s for s in get_cache()["series"] if match_fn(s.get("name") or "")],
+                key=lambda x: x.get("name", "").lower(),
+            )
+            results["series"] = matched[:limit] if limit else matched
 
     username = user.get("sub", "")
     user_settings = load_user_settings(username)
@@ -1542,6 +1549,7 @@ async def search_page(
             "search_live": live,
             "search_vod": vod and content_access["movies"],
             "search_series": series and content_access["series"],
+            "limit": limit,
             "favorites": user_settings.get("favorites", {"series": {}, "movies": {}}),
             "content_access": content_access,
         },
