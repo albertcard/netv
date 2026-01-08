@@ -57,8 +57,8 @@ _NVDEC_MIN_COMPUTE: dict[str, float] = {
 # VAAPI/QSV: static conservative lists (unlike NVIDIA, no clean runtime probe available).
 # Could parse `vainfo` output, but format varies by driver (i965 vs iHD vs radeonsi).
 # These codecs are nearly universal on any GPU from the last decade.
-_VAAPI_SAFE_CODECS = {"h264", "hevc", "mpeg2video", "vp8", "vp9"}
-_QSV_SAFE_CODECS = {"h264", "hevc", "mpeg2video", "vp9"}
+_VAAPI_SAFE_CODECS = {"h264", "hevc", "mpeg2video", "vp8", "vp9", "vc1", "av1"}
+_QSV_SAFE_CODECS = {"h264", "hevc", "mpeg2video", "vp9", "vc1", "av1"}
 
 # Max resolution height by setting
 _MAX_RES_HEIGHT: dict[str, int] = {
@@ -77,6 +77,7 @@ _probe_lock = threading.Lock()
 _probe_cache: dict[str, tuple[float, MediaInfo | None, list[SubtitleStream]]] = {}
 _series_probe_cache: dict[int, dict[str, Any]] = {}
 _gpu_nvdec_codecs: set[str] | None = None  # None = not probed yet
+_has_libplacebo: bool | None = None  # None = not probed yet
 _load_settings: Callable[[], dict[str, Any]] = dict
 
 # Use old "cache" if it exists (backwards compat), otherwise ".cache"
@@ -120,6 +121,8 @@ class MediaInfo:
     height: int = 0
     video_bitrate: int = 0  # bits per second, 0 if unknown
     interlaced: bool = False  # True if field_order indicates interlaced
+    is_10bit: bool = False  # True if pix_fmt indicates 10-bit color
+    is_hdr: bool = False  # True if color transfer indicates HDR
 
 
 def init(load_settings: Callable[[], dict[str, Any]]) -> None:
@@ -179,6 +182,26 @@ def _get_gpu_nvdec_codecs() -> set[str]:
     except Exception as e:
         log.debug("GPU probe failed: %s", e)
     return _gpu_nvdec_codecs
+
+
+def _has_libplacebo_filter() -> bool:
+    """Check if FFmpeg has libplacebo filter available (for GPU HDR tone mapping)."""
+    global _has_libplacebo
+    if _has_libplacebo is not None:
+        return _has_libplacebo
+    _has_libplacebo = False
+    try:
+        result = subprocess.run(
+            ["ffmpeg", "-filters"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        _has_libplacebo = "libplacebo" in result.stdout
+        log.info("libplacebo filter available: %s", _has_libplacebo)
+    except Exception as e:
+        log.debug("libplacebo probe failed: %s", e)
+    return _has_libplacebo
 
 
 # ===========================================================================
@@ -256,6 +279,8 @@ def _load_series_probe_cache() -> None:
                         height=entry.get("height", 0),
                         video_bitrate=entry.get("video_bitrate", 0),
                         interlaced=entry.get("interlaced", False),
+                        is_10bit=entry.get("is_10bit", False),
+                        is_hdr=entry.get("is_hdr", False),
                     )
                     subs = [
                         SubtitleStream(s["index"], s.get("lang", "und"), s.get("name", ""))
@@ -298,6 +323,8 @@ def _save_series_probe_cache() -> None:
                     "height": media_info.height,
                     "video_bitrate": media_info.video_bitrate,
                     "interlaced": media_info.interlaced,
+                    "is_10bit": media_info.is_10bit,
+                    "is_hdr": media_info.is_hdr,
                     "subtitles": [{"index": s.index, "lang": s.lang, "name": s.name} for s in subs],
                 }
     try:
@@ -535,6 +562,8 @@ def probe_media(
     height = 0
     video_bitrate = 0
     interlaced = False
+    is_10bit = False
+    is_hdr = False
     for stream in data.get("streams", []):
         codec = stream.get("codec_name", "").lower()
         codec_type = stream.get("codec_type", "")
@@ -545,6 +574,11 @@ def probe_media(
             # Detect interlacing from field_order (tt, bb, tb, bt = interlaced)
             field_order = stream.get("field_order", "").lower()
             interlaced = field_order in ("tt", "bb", "tb", "bt")
+            # Detect 10-bit from pix_fmt (e.g. yuv420p10le, p010le)
+            is_10bit = "10" in pix_fmt
+            # Detect HDR from color_transfer (PQ = smpte2084, HLG = arib-std-b67)
+            color_transfer = stream.get("color_transfer", "").lower()
+            is_hdr = color_transfer in ("smpte2084", "arib-std-b67")
             # Try to get bitrate from stream, fall back to format
             with suppress(ValueError, TypeError):
                 video_bitrate = int(stream.get("bit_rate", 0) or 0)
@@ -594,6 +628,8 @@ def probe_media(
         height=height,
         video_bitrate=video_bitrate,
         interlaced=interlaced,
+        is_10bit=is_10bit,
+        is_hdr=is_hdr,
     )
     # Only cache if we got valid video info (height > 0)
     if height <= 0:
@@ -641,6 +677,7 @@ def _build_video_args(
     use_hw_pipeline: bool,
     max_resolution: str,
     quality: str,
+    is_hdr: bool = False,
 ) -> tuple[list[str], list[str]]:
     """Build video args. Returns (pre_input_args, post_input_args)."""
     if copy_video:
@@ -662,19 +699,49 @@ def _build_video_args(
                 "3",
             ]
             scale = f"scale_cuda=-2:{h}:format=nv12" if h else "scale_cuda=format=nv12"
-            vf = f"yadif_cuda=1,{scale}" if deinterlace else scale
+            deint = "yadif_cuda=0," if deinterlace else ""  # mode=0 keeps original framerate
+            # HDR tone mapping: prefer libplacebo (Vulkan GPU), fall back to CPU zscale+tonemap
+            if is_hdr:
+                if _has_libplacebo_filter():
+                    tonemap = "hwdownload,format=p010le,libplacebo=tonemapping=hable:colorspace=bt709:color_primaries=bt709:color_trc=bt709,format=nv12,hwupload_cuda,"
+                else:
+                    tonemap = "hwdownload,format=p010le,zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=nv12,hwupload_cuda,"
+            else:
+                tonemap = ""
+            vf = f"{deint}{tonemap}{scale}"
         else:
             # Software decode, upload to GPU for scaling/encoding
             pre = []
             scale = f"scale_cuda=-2:{h}:format=nv12" if h else "scale_cuda=format=nv12"
-            if deinterlace:
-                # yadif on CPU, then upload and scale on GPU
-                vf = f"yadif=1,format=nv12,hwupload_cuda,{scale}"
+            deint = "yadif_cuda=0," if deinterlace else ""  # mode=0 keeps original framerate
+            # HDR tone mapping: prefer libplacebo (Vulkan GPU), fall back to CPU zscale+tonemap
+            if is_hdr:
+                if _has_libplacebo_filter():
+                    tonemap = "libplacebo=tonemapping=hable:colorspace=bt709:color_primaries=bt709:color_trc=bt709,format=nv12,hwupload_cuda,"
+                else:
+                    tonemap = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=nv12,hwupload_cuda,"
             else:
-                vf = f"format=nv12,hwupload_cuda,{scale}"
+                tonemap = "format=nv12,hwupload_cuda,"
+            vf = f"{tonemap}{deint}{scale}"
         preset = "p4" if deinterlace else "p2"
         encoder = "h264_nvenc"
-        enc_opts = ["-preset", preset, "-rc", "constqp", "-qp", str(qp)]
+        # Lookahead for better quality, B-frames for compression, AQ for adaptive quantization
+        enc_opts = [
+            "-preset",
+            preset,
+            "-rc",
+            "constqp",
+            "-qp",
+            str(qp),
+            "-rc-lookahead",
+            "32",
+            "-bf",
+            "3",
+            "-spatial-aq",
+            "1",
+            "-temporal-aq",
+            "1",
+        ]
 
     elif hw == "vaapi":
         if use_hw_pipeline:
@@ -685,47 +752,78 @@ def _build_video_args(
                 "vaapi",
                 "-hwaccel_device",
                 "/dev/dri/renderD128",
+                "-extra_hw_frames",
+                "3",
             ]
             scale = f"scale_vaapi=w=-2:h={h}:format=nv12" if h else "scale_vaapi=format=nv12"
-            vf = f"deinterlace_vaapi,{scale}" if deinterlace else scale
+            # HDR tone mapping on VAAPI
+            tonemap = "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709," if is_hdr else ""
+            vf = f"deinterlace_vaapi,{tonemap}{scale}" if deinterlace else f"{tonemap}{scale}"
         else:
             # Software decode, upload to GPU for scaling/encoding
             pre = ["-vaapi_device", "/dev/dri/renderD128"]
             scale = f"scale_vaapi=w=-2:h={h}:format=nv12" if h else "scale_vaapi=format=nv12"
-            if deinterlace:
-                # yadif on CPU, then upload and scale on GPU
-                vf = f"yadif=1,format=nv12,hwupload,{scale}"
-            else:
-                vf = f"format=nv12,hwupload,{scale}"
+            tonemap = "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709," if is_hdr else ""
+            deint = "deinterlace_vaapi," if deinterlace else ""
+            vf = f"format=nv12,hwupload,{deint}{tonemap}{scale}"
         encoder = "h264_vaapi"
-        enc_opts = ["-rc_mode", "CQP", "-qp", str(qp)]
+        enc_opts = ["-rc_mode", "CQP", "-qp", str(qp), "-bf", "3"]
 
     elif hw == "intel":
         if use_hw_pipeline:
             pre = ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
             scale = f"scale_qsv=w=-2:h={h}:format=nv12" if h else "scale_qsv=format=nv12"
-            vf = f"vpp_qsv=deinterlace=2,{scale}" if deinterlace else scale
+            # Combine deinterlace and tonemap into single vpp_qsv call when possible
+            if deinterlace and is_hdr:
+                vf = f"vpp_qsv=deinterlace=2:tonemap=1:format=nv12,{scale}"
+            elif deinterlace:
+                vf = f"vpp_qsv=deinterlace=2,{scale}"
+            elif is_hdr:
+                vf = f"vpp_qsv=tonemap=1:format=nv12,{scale}"
+            else:
+                vf = scale
         else:
             # Software decode, upload to GPU for scaling/encoding
             pre = ["-init_hw_device", "qsv=hw", "-filter_hw_device", "hw"]
             scale = f"scale_qsv=w=-2:h={h}:format=nv12" if h else "scale_qsv=format=nv12"
-            if deinterlace:
-                # yadif on CPU, then upload and scale on GPU
-                vf = f"yadif=1,format=nv12,hwupload=extra_hw_frames=64,{scale}"
+            # Combine deinterlace and tonemap into single vpp_qsv call when possible
+            if deinterlace and is_hdr:
+                vf = f"format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace=2:tonemap=1:format=nv12,{scale}"
+            elif deinterlace:
+                vf = f"format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=deinterlace=2,{scale}"
+            elif is_hdr:
+                vf = (
+                    f"format=nv12,hwupload=extra_hw_frames=64,vpp_qsv=tonemap=1:format=nv12,{scale}"
+                )
             else:
                 vf = f"format=nv12,hwupload=extra_hw_frames=64,{scale}"
         encoder = "h264_qsv"
-        enc_opts = ["-preset", "medium", "-global_quality", str(qp)]
+        enc_opts = [
+            "-global_quality",
+            str(qp),
+            "-bf",
+            "3",
+            "-look_ahead",
+            "1",
+            "-look_ahead_depth",
+            "40",
+        ]
 
     elif hw == "software":
         pre = []
-        if deinterlace:
-            vf = f"yadif=1,scale=-2:{h}" if h else "yadif=1"
+        # HDR tone mapping on CPU
+        if is_hdr:
+            tonemap = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=yuv420p,"
         else:
-            vf = f"scale=-2:{h},format=yuv420p" if h else "format=yuv420p"
+            tonemap = ""
+        deint = "yadif=0," if deinterlace else ""  # mode=0 keeps original framerate
+        if h:
+            vf = f"{deint}{tonemap}scale=-2:{h},format=yuv420p"
+        else:
+            vf = f"{deint}{tonemap}format=yuv420p".rstrip(",")
         crf = _QUALITY_CRF.get(quality, 26)
         encoder = "libx264"
-        enc_opts = ["-preset", "veryfast", "-crf", str(crf)]
+        enc_opts = ["-preset", "veryfast", "-crf", str(crf), "-bf", "3"]
 
     else:
         raise ValueError(f"Unrecognized hardware: '{hw}'.")
@@ -739,7 +837,7 @@ def _build_audio_args(*, copy_audio: bool, audio_sample_rate: int) -> list[str]:
     if copy_audio:
         return ["-c:a", "copy"]
     rate = str(audio_sample_rate) if audio_sample_rate in (44100, 48000) else "48000"
-    return ["-c:a", "aac", "-ac", "2", "-ar", rate, "-b:a", "192k"]
+    return ["-c:a", "aac", "-ac", "2", "-ar", rate, "-b:a", "192k", "-profile:a", "aac_low"]
 
 
 def get_live_hls_list_size() -> int:
@@ -809,6 +907,7 @@ def build_hls_ffmpeg_cmd(
         use_hw_pipeline=use_hw_pipeline,
         max_resolution=max_resolution,
         quality=quality,
+        is_hdr=media_info.is_hdr if media_info else False,
     )
     audio_args = _build_audio_args(
         copy_audio=copy_audio,

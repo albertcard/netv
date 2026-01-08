@@ -42,6 +42,8 @@ class FakeMediaInfo:
         audio_profile: str = "LC",
         height: int = 1080,
         interlaced: bool = False,
+        is_10bit: bool = False,
+        is_hdr: bool = False,
     ):
         self.video_codec = video_codec
         self.audio_codec = audio_codec
@@ -51,6 +53,8 @@ class FakeMediaInfo:
         self.audio_profile = audio_profile
         self.height = height
         self.interlaced = interlaced
+        self.is_10bit = is_10bit
+        self.is_hdr = is_hdr
 
 
 # =============================================================================
@@ -121,7 +125,7 @@ class TestBuildVideoArgs:
         assert "scale_cuda" in vf
 
     def test_nvidia_sw_fallback_filters(self):
-        """Test NVIDIA without hw pipeline uses SW decode + GPU scale."""
+        """Test NVIDIA without hw pipeline uses SW decode + GPU processing."""
         pre, post = _build_video_args(
             copy_video=False,
             hw="nvidia",
@@ -132,9 +136,9 @@ class TestBuildVideoArgs:
         )
         assert pre == []
         vf = post[post.index("-vf") + 1]
-        # SW deinterlace, then upload to GPU for scaling
-        assert "yadif=1" in vf
+        # Upload to GPU, then deinterlace (mode=0 for original framerate) and scale on GPU
         assert "hwupload_cuda" in vf
+        assert "yadif_cuda=0" in vf
         assert "scale_cuda" in vf
 
     def test_vaapi_filters(self):
@@ -166,7 +170,7 @@ class TestBuildVideoArgs:
         assert "scale_qsv" in vf
 
     def test_software_filters(self):
-        """Test software uses yadif and scale."""
+        """Test software uses yadif (mode=0 for original framerate) and scale."""
         pre, post = _build_video_args(
             copy_video=False,
             hw="software",
@@ -177,7 +181,7 @@ class TestBuildVideoArgs:
         )
         assert pre == []
         vf = post[post.index("-vf") + 1]
-        assert "yadif=1" in vf
+        assert "yadif=0" in vf
 
     @pytest.mark.parametrize(
         "quality,expected_qp", [("high", "20"), ("medium", "28"), ("low", "35")]
