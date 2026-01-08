@@ -144,7 +144,7 @@ if [ "$BUILD_X265" = "1" ]; then
     cd "$SRC_DIR" &&
     git -C x265_git pull 2>/dev/null || (rm -rf x265_git && git clone --depth 1 https://bitbucket.org/multicoreware/x265_git.git) &&
     cd x265_git/build/linux &&
-    PATH="$BIN_DIR:$PATH" cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" -DENABLE_SHARED=off ../../source &&
+    PATH="$BIN_DIR:$PATH" cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" -DLIB_INSTALL_DIR="$BUILD_DIR/lib" -DENABLE_SHARED=off ../../source &&
     PATH="$BIN_DIR:$PATH" make -j $NPROC &&
     make install
 fi

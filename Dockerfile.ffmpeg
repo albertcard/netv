@@ -141,6 +141,7 @@ RUN if [ "$BUILD_X265" = "1" ]; then \
         cd x265_git/build/linux && \
         cmake -G "Unix Makefiles" \
             -DCMAKE_INSTALL_PREFIX=$FFMPEG_BUILD \
+            -DLIB_INSTALL_DIR=$FFMPEG_BUILD/lib \
             -DENABLE_SHARED=off \
             ../../source && \
         make -j$(nproc) && \
