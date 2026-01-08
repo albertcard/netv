@@ -247,6 +247,7 @@ RUN if [ "$BUILD_LIBPLACEBO" = "1" ]; then \
             --default-library=static \
             --prefer-static \
             -Dvulkan=enabled \
+            -Dvulkan-registry="$VULKAN_SDK/share/vulkan/registry/vk.xml" \
             -Dopengl=disabled \
             -Dd3d11=disabled \
             -Ddemos=false \

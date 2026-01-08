@@ -257,9 +257,9 @@ if [ "$BUILD_LIBPLACEBO" = "1" ]; then
     git -C libplacebo pull 2>/dev/null || (rm -rf libplacebo && git clone --depth 1 https://code.videolan.org/videolan/libplacebo.git) &&
     cd libplacebo &&
     if [ -f build/build.ninja ]; then
-        meson setup --reconfigure build --buildtype=release --default-library=static --prefer-static -Dvulkan=enabled -Dopengl=disabled -Dd3d11=disabled -Ddemos=false --prefix "$BUILD_DIR" --libdir="$BUILD_DIR/lib"
+        meson setup --reconfigure build --buildtype=release --default-library=static --prefer-static -Dvulkan=enabled -Dvulkan-registry="$VULKAN_SDK/share/vulkan/registry/vk.xml" -Dopengl=disabled -Dd3d11=disabled -Ddemos=false --prefix "$BUILD_DIR" --libdir="$BUILD_DIR/lib"
     else
-        meson setup build --buildtype=release --default-library=static --prefer-static -Dvulkan=enabled -Dopengl=disabled -Dd3d11=disabled -Ddemos=false --prefix "$BUILD_DIR" --libdir="$BUILD_DIR/lib"
+        meson setup build --buildtype=release --default-library=static --prefer-static -Dvulkan=enabled -Dvulkan-registry="$VULKAN_SDK/share/vulkan/registry/vk.xml" -Dopengl=disabled -Dd3d11=disabled -Ddemos=false --prefix "$BUILD_DIR" --libdir="$BUILD_DIR/lib"
     fi &&
     ninja -C build &&
     ninja -C build install
