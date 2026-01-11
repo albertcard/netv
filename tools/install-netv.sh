@@ -59,6 +59,45 @@ sudo usermod -aG ssl-cert "$USER"
 
 echo "=== Installing netv systemd service ==="
 
+# Build PATH - prefer custom ffmpeg in ~/.local/bin if it exists
+USER_LOCAL_BIN="/home/$USER/.local/bin"
+if [ -x "$USER_LOCAL_BIN/ffmpeg" ]; then
+    echo "  Found custom ffmpeg in $USER_LOCAL_BIN"
+    ENV_PATH="$USER_LOCAL_BIN:/usr/local/bin:/usr/bin:/bin"
+else
+    ENV_PATH="/usr/local/bin:/usr/bin:/bin"
+fi
+
+# Build LIBVA env vars if custom libva exists (for VAAPI on hybrid GPU systems)
+USER_LOCAL_LIB="/home/$USER/.local/lib"
+LIBVA_ENVS=""
+if [ -f "$USER_LOCAL_LIB/libva.so" ]; then
+    echo "  Found custom libva in $USER_LOCAL_LIB"
+
+    # Auto-detect LIBVA driver based on GPU vendor
+    LIBVA_DRIVER=""
+    if lspci -nn 2>/dev/null | grep -qE "VGA.*\[8086:"; then
+        LIBVA_DRIVER="i965"  # Intel
+    elif lspci -nn 2>/dev/null | grep -qE "VGA.*\[1002:"; then
+        LIBVA_DRIVER="radeonsi"  # AMD
+    fi
+
+    # Auto-detect DRI path
+    DRI_PATH=""
+    for p in /usr/lib/x86_64-linux-gnu/dri /usr/lib64/dri /usr/lib/dri; do
+        if [ -d "$p" ]; then
+            DRI_PATH="$p"
+            break
+        fi
+    done
+
+    if [ -n "$LIBVA_DRIVER" ] && [ -n "$DRI_PATH" ]; then
+        echo "  Detected VAAPI driver: $LIBVA_DRIVER, path: $DRI_PATH"
+        LIBVA_ENVS="Environment=\"LIBVA_DRIVER_NAME=$LIBVA_DRIVER\"
+Environment=\"LIBVA_DRIVERS_PATH=$DRI_PATH\""
+    fi
+fi
+
 cat <<EOF | sudo tee /etc/systemd/system/netv.service
 [Unit]
 Description=NetV IPTV Server
@@ -69,6 +108,8 @@ Type=simple
 User=$USER
 Group=ssl-cert
 WorkingDirectory=$IPTV_DIR
+Environment="PATH=$ENV_PATH"
+$LIBVA_ENVS
 ExecStart=$IPTV_DIR/.venv/bin/python ./main.py --port $PORT $HTTPS_FLAG
 Restart=on-failure
 RestartSec=5

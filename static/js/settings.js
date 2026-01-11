@@ -473,12 +473,22 @@
           const resp = await fetch('/settings/refresh-encoders', { method: 'POST' });
           if (resp.ok) {
             const { encoders = {} } = await resp.json();
-            ['nvidia', 'intel', 'vaapi', 'software'].forEach(hw => {
-              const radio = container.querySelector(`input[name="transcode_hw"][value="${hw}"]`);
+            // Map encoder detection to radio button enable/disable states
+            const radioStates = {
+              'nvenc+vaapi': encoders.nvenc && encoders.vaapi,
+              'nvenc+software': encoders.nvenc,
+              'amf+vaapi': encoders.amf && encoders.vaapi,
+              'amf+software': encoders.amf,
+              'qsv': encoders.qsv,
+              'vaapi': encoders.vaapi,
+              'software': true,  // Always available
+            };
+            Object.entries(radioStates).forEach(([value, enabled]) => {
+              const radio = container.querySelector(`input[name="transcode_hw"][value="${value}"]`);
               const label = radio?.closest('label');
               if (radio && label) {
-                radio.disabled = !encoders[hw];
-                label.classList.toggle('opacity-40', !encoders[hw]);
+                radio.disabled = !enabled;
+                label.classList.toggle('opacity-40', !enabled);
               }
             });
             refreshBtn.textContent = 'Done!';

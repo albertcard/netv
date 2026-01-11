@@ -9,6 +9,7 @@ from typing import Any
 import hashlib
 import json
 import logging
+import os
 import pathlib
 import subprocess
 import threading
@@ -17,6 +18,106 @@ import urllib.parse
 
 
 log = logging.getLogger(__name__)
+
+
+# ===========================================================================
+# VAAPI Auto-Detection
+# ===========================================================================
+
+
+def _detect_vaapi_device() -> str | None:
+    """Auto-detect the VAAPI render device (Intel or AMD GPU).
+
+    Returns render device path like '/dev/dri/renderD128' or None if not found.
+    """
+    by_path = pathlib.Path("/dev/dri/by-path")
+    if not by_path.exists():
+        return None
+
+    # Map PCI addresses to render devices
+    pci_to_render: dict[str, str] = {}
+    for link in by_path.iterdir():
+        if "-render" in link.name:
+            # Extract PCI address from name like "pci-0000:00:02.0-render"
+            pci_addr = link.name.replace("pci-", "").replace("-render", "")
+            render_dev = f"/dev/dri/{link.resolve().name}"
+            pci_to_render[pci_addr] = render_dev
+
+    if not pci_to_render:
+        return None
+
+    # Find Intel (8086) or AMD (1002) GPU via lspci
+    try:
+        result = subprocess.run(
+            ["lspci", "-nn"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            # Look for VGA/Display controllers with Intel or AMD vendor ID
+            if "VGA" in line or "Display" in line or "3D" in line:
+                # Extract PCI address (first field, e.g., "00:02.0")
+                pci_addr = "0000:" + line.split()[0]
+                # Check vendor ID in brackets like [8086:0402] or [1002:...]
+                if "[8086:" in line or "[1002:" in line:
+                    if pci_addr in pci_to_render:
+                        return pci_to_render[pci_addr]
+    except Exception:
+        pass
+
+    # Fallback: return first render device (usually works for single-GPU systems)
+    return "/dev/dri/renderD128" if pathlib.Path("/dev/dri/renderD128").exists() else None
+
+
+def _detect_libva_driver() -> str | None:
+    """Auto-detect the appropriate LIBVA driver name.
+
+    Returns 'i965', 'iHD', or 'radeonsi' based on detected GPU, or None.
+    """
+    try:
+        result = subprocess.run(
+            ["lspci", "-nn"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        for line in result.stdout.splitlines():
+            if "VGA" in line or "Display" in line:
+                if "[8086:" in line:
+                    # Intel GPU - check generation for i965 vs iHD
+                    # Gen 8+ (Broadwell and newer) can use iHD, older use i965
+                    # For simplicity, try i965 first (works on more systems)
+                    return "i965"
+                if "[1002:" in line:
+                    # AMD GPU
+                    return "radeonsi"
+    except Exception:
+        pass
+    return None
+
+
+def _detect_dri_path() -> str | None:
+    """Auto-detect the system DRI drivers path.
+
+    Returns path like '/usr/lib/x86_64-linux-gnu/dri' or None.
+    """
+    # Check common locations in order of preference
+    candidates = [
+        "/usr/lib/x86_64-linux-gnu/dri",  # Debian/Ubuntu
+        "/usr/lib64/dri",                  # Fedora/RHEL
+        "/usr/lib/dri",                    # Arch
+    ]
+    for path in candidates:
+        if pathlib.Path(path).is_dir():
+            return path
+    return None
+
+
+# Cached detection results (computed once at import)
+VAAPI_DEVICE = _detect_vaapi_device()
+LIBVA_DRIVER = _detect_libva_driver()
+DRI_PATH = _detect_dri_path()
 
 APP_DIR = pathlib.Path(__file__).parent
 # Use old "cache" if it exists (backwards compat), otherwise ".cache"
@@ -232,10 +333,15 @@ def get_cached_info(cache_key: str, fetch_fn: Callable[[], Any], force: bool = F
     return data
 
 
-def _test_encoder(cmd: list[str], timeout: int = 5) -> tuple[bool, str]:
+def _test_encoder(cmd: list[str], timeout: int = 5, env: dict | None = None) -> tuple[bool, str]:
     """Test if an encoder works. Returns (success, error_message)."""
     try:
-        result = subprocess.run(cmd, capture_output=True, timeout=timeout)
+        run_env = None
+        if env:
+            import os
+            run_env = os.environ.copy()
+            run_env.update(env)
+        result = subprocess.run(cmd, capture_output=True, timeout=timeout, env=run_env)
         if result.returncode == 0:
             return True, ""
         stderr = result.stderr.decode(errors="replace").strip()
@@ -256,10 +362,10 @@ def detect_encoders() -> dict[str, bool]:
     """Detect available FFmpeg H.264 encoders by testing actual hardware."""
     log.info("Detecting hardware encoders...")
     encoders = {
-        "nvidia": False,
-        "intel": False,
+        "nvenc": False,
+        "amf": False,
+        "qsv": False,
         "vaapi": False,
-        "software": False,
     }
 
     # Test input: 1 frame of 64x64 black
@@ -267,15 +373,23 @@ def detect_encoders() -> dict[str, bool]:
     base_cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error", "-y"]
     null_out = ["-f", "null", "-"]
 
-    # NVIDIA: try nvenc directly
+    # NVENC: try nvenc directly
     ok, err = _test_encoder(base_cmd + test_input + ["-c:v", "h264_nvenc"] + null_out)
-    encoders["nvidia"] = ok
+    encoders["nvenc"] = ok
     if ok:
-        log.info("  NVIDIA (h264_nvenc): available")
+        log.info("  NVENC (h264_nvenc): available")
     else:
-        log.info("  NVIDIA (h264_nvenc): unavailable - %s", err)
+        log.info("  NVENC (h264_nvenc): unavailable - %s", err)
 
-    # Intel QSV: needs hwaccel init
+    # AMF: try amf directly
+    ok, err = _test_encoder(base_cmd + test_input + ["-c:v", "h264_amf"] + null_out)
+    encoders["amf"] = ok
+    if ok:
+        log.info("  AMF (h264_amf): available")
+    else:
+        log.info("  AMF (h264_amf): unavailable - %s", err)
+
+    # QSV: needs hwaccel init
     ok, err = _test_encoder(
         base_cmd
         + ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
@@ -283,35 +397,33 @@ def detect_encoders() -> dict[str, bool]:
         + ["-c:v", "h264_qsv"]
         + null_out
     )
-    encoders["intel"] = ok
+    encoders["qsv"] = ok
     if ok:
-        log.info("  Intel (h264_qsv): available")
+        log.info("  QSV (h264_qsv): available")
     else:
-        log.info("  Intel (h264_qsv): unavailable - %s", err)
+        log.info("  QSV (h264_qsv): unavailable - %s", err)
 
-    # VA-API: needs device and hwupload
-    ok, err = _test_encoder(
-        base_cmd
-        + ["-vaapi_device", "/dev/dri/renderD128"]
-        + test_input
-        + ["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi"]
-        + null_out
-    )
-    encoders["vaapi"] = ok
-    if ok:
-        log.info("  VA-API (h264_vaapi): available")
+    # VA-API: needs device, hwupload, and driver env vars for hybrid GPU systems
+    if VAAPI_DEVICE and LIBVA_DRIVER and DRI_PATH:
+        vaapi_env = {
+            "LIBVA_DRIVER_NAME": LIBVA_DRIVER,
+            "LIBVA_DRIVERS_PATH": DRI_PATH,
+        }
+        ok, err = _test_encoder(
+            base_cmd
+            + ["-init_hw_device", f"vaapi=va:{VAAPI_DEVICE}"]
+            + test_input
+            + ["-vf", "format=nv12,hwupload", "-c:v", "h264_vaapi"]
+            + null_out,
+            env=vaapi_env,
+        )
+        encoders["vaapi"] = ok
+        if ok:
+            log.info("  VAAPI (h264_vaapi): available (device=%s, driver=%s)", VAAPI_DEVICE, LIBVA_DRIVER)
+        else:
+            log.info("  VAAPI (h264_vaapi): unavailable - %s", err)
     else:
-        log.info("  VA-API (h264_vaapi): unavailable - %s", err)
-
-    # Software: libx264
-    ok, err = _test_encoder(
-        base_cmd + test_input + ["-c:v", "libx264", "-preset", "ultrafast"] + null_out
-    )
-    encoders["software"] = ok
-    if ok:
-        log.info("  Software (libx264): available")
-    else:
-        log.info("  Software (libx264): unavailable - %s", err)
+        log.info("  VAAPI (h264_vaapi): unavailable - no Intel/AMD GPU detected")
 
     return encoders
 
@@ -327,10 +439,19 @@ def refresh_encoders() -> dict[str, bool]:
 
 
 def _default_encoder() -> str:
-    """Return first available encoder, preferring most specific."""
-    for enc in ("nvidia", "intel", "vaapi", "software"):
-        if AVAILABLE_ENCODERS.get(enc):
-            return enc
+    """Return first available encoder option.
+
+    Preference order: nvenc > amf > qsv > vaapi > software
+    For nvenc/amf, prefer +vaapi fallback if VAAPI is available.
+    """
+    if AVAILABLE_ENCODERS.get("nvenc"):
+        return "nvenc+vaapi" if AVAILABLE_ENCODERS.get("vaapi") else "nvenc+software"
+    if AVAILABLE_ENCODERS.get("amf"):
+        return "amf+vaapi" if AVAILABLE_ENCODERS.get("vaapi") else "amf+software"
+    if AVAILABLE_ENCODERS.get("qsv"):
+        return "qsv"
+    if AVAILABLE_ENCODERS.get("vaapi"):
+        return "vaapi"
     return "software"
 
 
@@ -357,6 +478,15 @@ def load_server_settings() -> dict[str, Any]:
     else:
         data = {}
     data.setdefault("transcode_mode", "auto")
+
+    # Migrate old transcode_hw values to new format
+    old_hw = data.get("transcode_hw", "")
+    if old_hw == "nvidia":
+        data["transcode_hw"] = "nvenc+vaapi" if AVAILABLE_ENCODERS.get("vaapi") else "nvenc+software"
+    elif old_hw == "intel":
+        data["transcode_hw"] = "qsv"
+    # "vaapi" and "software" remain unchanged
+
     data.setdefault("transcode_hw", _default_encoder())
     data.setdefault("vod_transcode_cache_mins", 60)
     # 0 = no caching (dead sessions cleaned immediately)

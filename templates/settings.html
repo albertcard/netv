@@ -439,27 +439,59 @@
       </div>
       <div>
         <label class="block text-sm font-medium mb-2">Hardware Acceleration</label>
-        <div class="flex gap-4 flex-wrap">
-          <label class="flex items-center gap-2 text-sm {% if not available_encoders.nvidia %}opacity-40{% endif %}">
-            <input type="radio" name="transcode_hw" value="nvidia" {% if transcode_hw == 'nvidia' %}checked{% endif %}
-                   {% if not available_encoders.nvidia %}disabled{% endif %}
-                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
-            <span>NVIDIA</span>
-          </label>
-          <label class="flex items-center gap-2 text-sm {% if not available_encoders.vaapi %}opacity-40{% endif %}">
-            <input type="radio" name="transcode_hw" value="vaapi" {% if transcode_hw == 'vaapi' %}checked{% endif %}
-                   {% if not available_encoders.vaapi %}disabled{% endif %}
-                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
-            <span>Intel/AMD (VA-API)</span>
-          </label>
-          <label class="flex items-center gap-2 text-sm {% if not available_encoders.software %}opacity-40{% endif %}">
-            <input type="radio" name="transcode_hw" value="software" {% if transcode_hw == 'software' %}checked{% endif %}
-                   {% if not available_encoders.software %}disabled{% endif %}
-                   class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
-            <span>Software</span>
-          </label>
+        <div class="flex flex-col gap-2">
+          <!-- NVENC options -->
+          <div class="flex gap-4">
+            <label class="flex items-center gap-2 text-sm {% if not available_encoders.nvenc or not available_encoders.vaapi %}opacity-40{% endif %}">
+              <input type="radio" name="transcode_hw" value="nvenc+vaapi" {% if transcode_hw == 'nvenc+vaapi' %}checked{% endif %}
+                     {% if not available_encoders.nvenc or not available_encoders.vaapi %}disabled{% endif %}
+                     class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+              <span>NVENC + VAAPI</span>
+            </label>
+            <label class="flex items-center gap-2 text-sm {% if not available_encoders.nvenc %}opacity-40{% endif %}">
+              <input type="radio" name="transcode_hw" value="nvenc+software" {% if transcode_hw == 'nvenc+software' %}checked{% endif %}
+                     {% if not available_encoders.nvenc %}disabled{% endif %}
+                     class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+              <span>NVENC + Software</span>
+            </label>
+          </div>
+          <!-- AMF options -->
+          <div class="flex gap-4">
+            <label class="flex items-center gap-2 text-sm {% if not available_encoders.amf or not available_encoders.vaapi %}opacity-40{% endif %}">
+              <input type="radio" name="transcode_hw" value="amf+vaapi" {% if transcode_hw == 'amf+vaapi' %}checked{% endif %}
+                     {% if not available_encoders.amf or not available_encoders.vaapi %}disabled{% endif %}
+                     class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+              <span>AMF + VAAPI</span>
+            </label>
+            <label class="flex items-center gap-2 text-sm {% if not available_encoders.amf %}opacity-40{% endif %}">
+              <input type="radio" name="transcode_hw" value="amf+software" {% if transcode_hw == 'amf+software' %}checked{% endif %}
+                     {% if not available_encoders.amf %}disabled{% endif %}
+                     class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+              <span>AMF + Software</span>
+            </label>
+          </div>
+          <!-- Standalone options -->
+          <div class="flex gap-4">
+            <label class="flex items-center gap-2 text-sm {% if not available_encoders.qsv %}opacity-40{% endif %}">
+              <input type="radio" name="transcode_hw" value="qsv" {% if transcode_hw == 'qsv' %}checked{% endif %}
+                     {% if not available_encoders.qsv %}disabled{% endif %}
+                     class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+              <span>QSV (Intel)</span>
+            </label>
+            <label class="flex items-center gap-2 text-sm {% if not available_encoders.vaapi %}opacity-40{% endif %}">
+              <input type="radio" name="transcode_hw" value="vaapi" {% if transcode_hw == 'vaapi' %}checked{% endif %}
+                     {% if not available_encoders.vaapi %}disabled{% endif %}
+                     class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+              <span>VAAPI</span>
+            </label>
+            <label class="flex items-center gap-2 text-sm">
+              <input type="radio" name="transcode_hw" value="software" {% if transcode_hw == 'software' %}checked{% endif %}
+                     class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
+              <span>Software</span>
+            </label>
+          </div>
         </div>
-        <p class="text-xs text-gray-400 mt-1">Choose the most specific option available for your hardware</p>
+        <p class="text-xs text-gray-400 mt-1">NVENC/AMF encode on GPU; +VAAPI uses GPU decode, +Software uses CPU decode</p>
         <button type="button" id="refresh-encoders-btn"
                 class="mt-2 px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 rounded">
           Re-detect Hardware

@@ -15,10 +15,21 @@ import tempfile
 import threading
 import time
 
+# Import VAAPI auto-detection results (avoid circular import by importing constants only)
+from cache import VAAPI_DEVICE
+
 
 log = logging.getLogger(__name__)
 
-HwAccel = Literal["nvidia", "intel", "vaapi", "software"]
+HwAccel = Literal["nvenc+vaapi", "nvenc+software", "amf+vaapi", "amf+software", "qsv", "vaapi", "software"]
+
+
+def _parse_hw(hw: HwAccel) -> tuple[str, str]:
+    """Parse hw into (encoder, fallback). e.g. 'nvenc+vaapi' -> ('nvenc', 'vaapi')"""
+    if "+" in hw:
+        encoder, fallback = hw.split("+", 1)
+        return encoder, fallback
+    return hw, "software"  # standalone options fallback to software
 
 # Timing constants
 _HLS_SEGMENT_DURATION_SEC = 3.0  # Short segments for faster startup/seeking
@@ -123,6 +134,7 @@ class MediaInfo:
     interlaced: bool = False  # True if field_order indicates interlaced
     is_10bit: bool = False  # True if pix_fmt indicates 10-bit color
     is_hdr: bool = False  # True if color transfer indicates HDR
+    is_hls: bool = False  # True if format is HLS (for input options)
 
 
 def init(load_settings: Callable[[], dict[str, Any]]) -> None:
@@ -281,6 +293,7 @@ def _load_series_probe_cache() -> None:
                         interlaced=entry.get("interlaced", False),
                         is_10bit=entry.get("is_10bit", False),
                         is_hdr=entry.get("is_hdr", False),
+                        is_hls=entry.get("is_hls", False),
                     )
                     subs = [
                         SubtitleStream(s["index"], s.get("lang", "und"), s.get("name", ""))
@@ -521,40 +534,52 @@ def probe_media(
         episode_id,
     )
 
-    try:
-        cmd = [
-            "ffprobe",
-            "-probesize",
-            "50000",
-            "-analyzeduration",
-            "500000",
-            "-v",
-            "quiet",
-            "-print_format",
-            "json",
-            "-show_streams",
-            "-show_format",
-            # Allow HLS segments without standard extensions (some IPTV providers use token URLs)
-            "-extension_picky",
-            "0",
-        ]
-        user_agent = get_user_agent()
-        if user_agent:
-            cmd.extend(["-user_agent", user_agent])
-        cmd.append(url)
-        log.info("Probing: %s", " ".join(cmd))
-        result = subprocess.run(
-            cmd,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=_PROBE_TIMEOUT_SEC,
-        )
-        if result.returncode != 0:
-            return None, []
-        data = json.loads(result.stdout)
-    except Exception as e:
-        log.warning("Failed to probe media: %s", e)
+    # Build base probe command
+    base_cmd = [
+        "ffprobe",
+        "-probesize",
+        "50000",
+        "-analyzeduration",
+        "500000",
+        "-v",
+        "quiet",
+        "-print_format",
+        "json",
+        "-show_streams",
+        "-show_format",
+    ]
+    user_agent = get_user_agent()
+    if user_agent:
+        base_cmd.extend(["-user_agent", user_agent])
+
+    # Try probe without forcing HLS first, retry with HLS options if it fails
+    is_hls = False
+    data = None
+    for force_hls in (False, True):
+        try:
+            cmd = base_cmd.copy()
+            if force_hls:
+                cmd.extend(["-f", "hls", "-extension_picky", "0"])
+            cmd.append(url)
+            log.info("Probing%s: %s", " (HLS mode)" if force_hls else "", " ".join(cmd))
+            result = subprocess.run(
+                cmd,
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=_PROBE_TIMEOUT_SEC,
+            )
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                # Check detected format or if we forced HLS
+                format_name = data.get("format", {}).get("format_name", "").lower()
+                is_hls = force_hls or "hls" in format_name
+                break
+        except Exception as e:
+            log.warning("Probe failed%s: %s", " (HLS mode)" if force_hls else "", e)
+            continue
+
+    if data is None:
         return None, []
 
     video_codec = audio_codec = pix_fmt = audio_profile = ""
@@ -634,6 +659,7 @@ def probe_media(
         interlaced=interlaced,
         is_10bit=is_10bit,
         is_hdr=is_hdr,
+        is_hls=is_hls,
     )
     # Only cache if we got valid video info (height > 0)
     if height <= 0:
@@ -687,13 +713,25 @@ def _build_video_args(
     if copy_video:
         return [], ["-c:v", "copy"]
 
+    # Parse hw into encoder and fallback
+    enc_type, fallback = _parse_hw(hw)
+
+    # Fail loudly if VAAPI is needed but no device was detected
+    needs_vaapi = enc_type == "vaapi" or fallback == "vaapi"
+    if needs_vaapi and not VAAPI_DEVICE:
+        raise RuntimeError(
+            f"Hardware acceleration '{hw}' requires VAAPI but no Intel/AMD GPU was detected. "
+            "Select a different hardware option in settings."
+        )
+
     # Height expr for scale filter (scale down only, -2 keeps width divisible by 2)
     max_h = _MAX_RES_HEIGHT.get(max_resolution)
     h = f"min(ih\\,{max_h})" if max_h else None
     qp = _QUALITY_QP.get(quality, 28)
 
-    if hw == "nvidia":
+    if enc_type == "nvenc":
         if use_hw_pipeline:
+            # CUDA decode path
             pre = [
                 "-hwaccel",
                 "cuda",
@@ -713,6 +751,20 @@ def _build_video_args(
             else:
                 tonemap = ""
             vf = f"{deint}{tonemap}{scale}"
+        elif fallback == "vaapi":
+            # VAAPI decode + VAAPI filters + hwdownload + hwupload_cuda for NVENC
+            pre = [
+                "-hwaccel",
+                "vaapi",
+                "-hwaccel_output_format",
+                "vaapi",
+                "-hwaccel_device",
+                VAAPI_DEVICE,
+            ]
+            scale = f"scale_vaapi=w=-2:h={h}:format=nv12" if h else "scale_vaapi=format=nv12"
+            tonemap = "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709," if is_hdr else ""
+            deint = "deinterlace_vaapi," if deinterlace else ""
+            vf = f"{deint}{tonemap}{scale},hwdownload,format=nv12,hwupload_cuda"
         else:
             # Software decode, upload to GPU for scaling/encoding
             pre = []
@@ -750,7 +802,45 @@ def _build_video_args(
             "1",
         ]
 
-    elif hw == "vaapi":
+    elif enc_type == "amf":
+        # AMF has no hardware decode - always uses fallback for decode/filter
+        if fallback == "vaapi":
+            # VAAPI decode + VAAPI filters + hwdownload for AMF encode
+            pre = [
+                "-hwaccel",
+                "vaapi",
+                "-hwaccel_output_format",
+                "vaapi",
+                "-hwaccel_device",
+                VAAPI_DEVICE,
+            ]
+            scale = f"scale_vaapi=w=-2:h={h}:format=nv12" if h else "scale_vaapi=format=nv12"
+            tonemap = "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709," if is_hdr else ""
+            deint = "deinterlace_vaapi," if deinterlace else ""
+            vf = f"{deint}{tonemap}{scale},hwdownload,format=nv12"
+        else:
+            # Software decode + software filters
+            pre = []
+            if is_hdr:
+                tonemap = "zscale=t=linear:npl=100,format=gbrpf32le,zscale=p=bt709,tonemap=hable:desat=0,zscale=t=bt709:m=bt709:r=tv,format=nv12,"
+            else:
+                tonemap = ""
+            deint = "yadif=0," if deinterlace else ""
+            scale = f"scale=-2:{h}" if h else ""
+            vf = f"{deint}{tonemap}{scale},format=nv12".strip(",").replace(",,", ",")
+        encoder = "h264_amf"
+        enc_opts = [
+            "-rc",
+            "cqp",
+            "-qp_i",
+            str(qp),
+            "-qp_p",
+            str(qp),
+            "-quality",
+            "balanced",
+        ]
+
+    elif enc_type == "vaapi":
         if use_hw_pipeline:
             pre = [
                 "-hwaccel",
@@ -758,7 +848,7 @@ def _build_video_args(
                 "-hwaccel_output_format",
                 "vaapi",
                 "-hwaccel_device",
-                "/dev/dri/renderD128",
+                VAAPI_DEVICE,
                 "-extra_hw_frames",
                 "3",
             ]
@@ -768,7 +858,7 @@ def _build_video_args(
             vf = f"deinterlace_vaapi,{tonemap}{scale}" if deinterlace else f"{tonemap}{scale}"
         else:
             # Software decode, upload to GPU for scaling/encoding
-            pre = ["-vaapi_device", "/dev/dri/renderD128"]
+            pre = ["-vaapi_device", VAAPI_DEVICE]
             scale = f"scale_vaapi=w=-2:h={h}:format=nv12" if h else "scale_vaapi=format=nv12"
             tonemap = "tonemap_vaapi=format=nv12:t=bt709:m=bt709:p=bt709," if is_hdr else ""
             deint = "deinterlace_vaapi," if deinterlace else ""
@@ -776,7 +866,7 @@ def _build_video_args(
         encoder = "h264_vaapi"
         enc_opts = ["-rc_mode", "CQP", "-qp", str(qp), "-bf", "3"]
 
-    elif hw == "intel":
+    elif enc_type == "qsv":
         if use_hw_pipeline:
             pre = ["-hwaccel", "qsv", "-hwaccel_output_format", "qsv"]
             scale = f"scale_qsv=w=-2:h={h}:format=nv12" if h else "scale_qsv=format=nv12"
@@ -816,7 +906,7 @@ def _build_video_args(
             "40",
         ]
 
-    elif hw == "software":
+    elif enc_type == "software":
         pre = []
         # HDR tone mapping on CPU
         if is_hdr:
@@ -833,7 +923,7 @@ def _build_video_args(
         enc_opts = ["-preset", "veryfast", "-crf", str(crf), "-bf", "3"]
 
     else:
-        raise ValueError(f"Unrecognized hardware: '{hw}'.")
+        raise ValueError(f"Unrecognized hardware encoder: '{enc_type}'.")
 
     post = ["-vf", vf, "-c:v", encoder, *enc_opts, "-g", "60"]
     return pre, post
@@ -890,14 +980,17 @@ def build_hls_ffmpeg_cmd(
     )
 
     # Full hardware pipeline if GPU supports the codec
+    # Parse hw to get encoder type
+    enc_type, _ = _parse_hw(hw)
     codec = media_info.video_codec if media_info else ""
     use_hw_pipeline = bool(
         not copy_video
         and media_info
         and (
-            (hw == "nvidia" and codec in _get_gpu_nvdec_codecs())
-            or (hw == "vaapi" and codec in _VAAPI_SAFE_CODECS)
-            or (hw == "intel" and codec in _QSV_SAFE_CODECS)
+            (enc_type == "nvenc" and codec in _get_gpu_nvdec_codecs())
+            or (enc_type == "vaapi" and codec in _VAAPI_SAFE_CODECS)
+            or (enc_type == "qsv" and codec in _QSV_SAFE_CODECS)
+            # AMF never has hw decode pipeline - always False
         )
     )
 
@@ -960,8 +1053,9 @@ def build_hls_ffmpeg_cmd(
     )
     if user_agent:
         cmd.extend(["-user_agent", user_agent])
-    # Allow HLS segments without standard extensions (some IPTV providers use token URLs)
-    cmd.extend(["-extension_picky", "0"])
+    # Use HLS demuxer options if probe detected HLS format
+    if media_info and media_info.is_hls:
+        cmd.extend(["-f", "hls", "-extension_picky", "0"])
     cmd.extend(["-i", input_url])
 
     # Subtitle extraction

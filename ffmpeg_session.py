@@ -704,7 +704,7 @@ async def _handle_existing_vod_session(
     hls_duration = _calc_hls_duration(playlist_path, len(segments))
     log.info("Resuming session %s from %.1fs", existing_id, hls_duration)
 
-    media_info = (await asyncio.to_thread(probe_media, url))[0] if do_probe else None
+    media_info = (await asyncio.to_thread(probe_media, url, None, None, ""))[0] if do_probe else None
     cmd = build_hls_ffmpeg_cmd(
         url,
         hw,
@@ -715,6 +715,7 @@ async def _handle_existing_vod_session(
         max_resolution,
         quality,
         get_user_agent(),
+        None,
     )
 
     i_idx = cmd.index("-i")
