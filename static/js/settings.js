@@ -429,6 +429,23 @@
   }
 
   // ============================================================
+  // Guide Settings
+  // ============================================================
+
+  function setupGuideSettings() {
+    const virtualScrollCb = document.getElementById('virtual-scroll');
+    if (virtualScrollCb) {
+      virtualScrollCb.addEventListener('change', async function() {
+        await saveWithFeedback(
+          '/api/user-prefs',
+          { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({virtual_scroll: this.checked}) },
+          getFeedbackEl(this)
+        );
+      });
+    }
+  }
+
+  // ============================================================
   // Transcode & User-Agent Settings
   // ============================================================
 
@@ -876,6 +893,7 @@
     setupSeriesCategoryFilter();
     setupChromeCcLink();
     setupCaptionSettings();
+    setupGuideSettings();
     setupTranscodeSettings();
     setupUserAgentSettings();
     setupDataCache();

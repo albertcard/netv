@@ -269,7 +269,7 @@ class TestGuide:
             resp = auth_client.get("/guide?cats=1")
             assert resp.status_code == 200
 
-    def test_guide_redirects_to_saved_filter(self, auth_client, tmp_path):
+    def test_guide_uses_saved_filter(self, auth_client, tmp_path):
         user_dir = tmp_path / "users" / "testuser"
         user_dir.mkdir(parents=True, exist_ok=True)
         (user_dir / "settings.json").write_text(json.dumps({"guide_filter": ["1", "2"]}))
@@ -277,9 +277,10 @@ class TestGuide:
         cache_module.get_cache()["live_categories"] = []
         cache_module.get_cache()["live_streams"] = []
 
-        resp = auth_client.get("/guide", follow_redirects=False)
-        assert resp.status_code == 303
-        assert "cats=1,2" in resp.headers["location"]
+        # Guide now renders directly using saved filter (no redirect)
+        with patch("main.epg.has_programs", return_value=True):
+            resp = auth_client.get("/guide")
+            assert resp.status_code == 200
 
 
 class TestVod:

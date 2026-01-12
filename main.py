@@ -608,15 +608,9 @@ async def guide_page(
     offset: int = 0,  # hours offset from now
     cats: str = "",  # comma-separated category IDs
 ):
-    # If no cats param, redirect to saved filter (per-user)
     username = user.get("sub", "")
-    if not cats:
-        user_settings = load_user_settings(username)
-        saved = user_settings.get("guide_filter", [])
-        if saved:
-            return RedirectResponse(
-                f"/guide?offset={offset}&cats={','.join(saved)}", status_code=303
-            )
+    # Check if cats was explicitly in URL (even if empty)
+    cats_in_url = "cats" in request.query_params
 
     # If no channel data in memory, try file cache first (async to avoid blocking)
     if "live_categories" not in get_cache() or "live_streams" not in get_cache():
@@ -652,10 +646,28 @@ async def guide_page(
 
     # Get the full saved filter for dropdown (not just current URL filter)
     user_settings = load_user_settings(username)
-    saved_filter = set(user_settings.get("guide_filter", []))
+    saved_filter_list = user_settings.get("guide_filter", [])
+    saved_filter = set(saved_filter_list)  # For fast lookup
+    # Build ordered list of category objects matching user's saved order
+    cat_by_id = {str(c["category_id"]): c for c in categories}
+    ordered_filter_cats = [cat_by_id[cid] for cid in saved_filter_list if cid in cat_by_id]
+
+    # Get saved VIEW selection (separate from Settings filter)
+    saved_view_cats = user_settings.get("guide_selected_cats")  # None = show all
+
+    # Determine effective cats: URL param (if present) > saved view > all from filter
+    if cats_in_url:
+        # URL explicitly has cats param (could be empty for "none")
+        effective_cats = cats
+    elif saved_view_cats is not None:
+        # Use saved view selection (could be [] for "none")
+        effective_cats = ",".join(saved_view_cats)
+    else:
+        # Default: show all from settings filter
+        effective_cats = ",".join(saved_filter_list)
 
     # Use helper to get filtered/sorted streams
-    streams, ordered_cats, selected_cats = _get_guide_streams(cats, username)
+    streams, ordered_cats, selected_cats = _get_guide_streams(effective_cats, username)
     total_count = len(streams)
 
     # Time window: 3 hours starting from offset
@@ -663,9 +675,10 @@ async def guide_page(
     window_start = now.replace(minute=0, second=0, microsecond=0) + timedelta(hours=offset)
     window_end = window_start + timedelta(hours=3)
 
-    # Virtual scrolling: only render first batch (130 rows)
-    # JS will handle fetching more as user scrolls
-    initial_batch_size = 130
+    # Virtual scrolling: only render first batch, JS fetches rest on scroll
+    # When disabled, render all rows server-side
+    virtual_scroll_enabled = user_settings.get("virtual_scroll", True)
+    initial_batch_size = 500 if virtual_scroll_enabled else total_count
     grid_data = _build_guide_rows(streams, 0, initial_batch_size, window_start, window_end)
 
     # Time markers (every 30 min) - convert to local time for display
@@ -698,8 +711,10 @@ async def guide_page(
         {
             "categories": categories,
             "selected_cats": selected_cats,
-            "saved_filter": saved_filter,  # Full saved filter for dropdown
+            "saved_filter": saved_filter,  # Full saved filter for dropdown (set)
+            "ordered_filter_cats": ordered_filter_cats,  # Ordered list for dropdown
             "cats_param": cats,
+            "effective_cats": effective_cats,  # What's actually being used
             "grid_data": grid_data,
             "time_markers": time_markers,
             "time_markers_mobile": time_markers_mobile,
@@ -709,6 +724,7 @@ async def guide_page(
             "epg_loading": epg_loading,
             "channel_count": len(grid_data),
             "total_count": total_count,  # For virtual scrolling
+            "virtual_scroll": virtual_scroll_enabled,
             "loading": False,
             "content_access": _get_content_access(username),
         },
@@ -889,7 +905,10 @@ async def guide_rows_api(
 
     rows = _build_guide_rows(streams, start, count, window_start, window_end)
 
-    return JSONResponse({"rows": rows, "total": total_count, "start": start})
+    return JSONResponse(
+        {"rows": rows, "total": total_count, "start": start},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 def _start_vod_background_load() -> None:
@@ -2093,6 +2112,7 @@ async def settings_page(request: Request, user: Annotated[dict, Depends(require_
             "is_admin": is_admin,
             # User settings
             "captions_enabled": user_settings.get("captions_enabled", False),
+            "virtual_scroll": user_settings.get("virtual_scroll", True),
             "live_categories": live_categories,
             "vod_categories": vod_categories,
             "series_categories": series_categories,
@@ -2515,7 +2535,7 @@ async def cast_log_endpoint(request: Request):
 
 @app.get("/api/user-prefs")
 async def get_user_prefs(user: Annotated[dict, Depends(require_auth)]):
-    """Get user preferences (favorites, cc_lang, cc_style, cast_host)."""
+    """Get user preferences (favorites, cc_lang, cc_style, cast_host, virtual_scroll)."""
     username = user.get("sub", "")
     settings = load_user_settings(username)
     return {
@@ -2523,6 +2543,7 @@ async def get_user_prefs(user: Annotated[dict, Depends(require_auth)]):
         "cc_lang": settings.get("cc_lang", ""),
         "cc_style": settings.get("cc_style", {}),
         "cast_host": settings.get("cast_host", ""),
+        "virtual_scroll": settings.get("virtual_scroll", True),
     }
 
 
@@ -2538,7 +2559,14 @@ async def save_user_prefs(
         raise HTTPException(400, "Request too large")
     data = json.loads(body)
     settings = load_user_settings(username)
-    for key in ("favorites", "cc_lang", "cc_style", "cast_host"):
+    for key in (
+        "favorites",
+        "cc_lang",
+        "cc_style",
+        "cast_host",
+        "virtual_scroll",
+        "guide_selected_cats",
+    ):
         if key in data:
             settings[key] = data[key]
     save_user_settings(username, settings)

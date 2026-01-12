@@ -47,21 +47,57 @@
 {% block content %}
 <div class="guide-container flex flex-col h-full min-w-0">
   <!-- Desktop header (fixed, non-scrolling) -->
-  <div class="desktop-only flex-wrap items-center justify-between gap-2 mb-4">
-    <div class="min-w-0 flex items-center gap-2">
+  <div class="desktop-only flex items-center justify-between gap-2 mb-4 h-10">
+    <div class="min-w-0 flex items-center gap-2 flex-shrink-0">
       <h2 class="text-xl sm:text-3xl font-bold">Live TV</h2>
       {% if saved_filter or selected_cats %}
-      <!-- Category filter dropdown -->
-      <select id="category-filter" class="bg-gray-700 text-sm rounded px-2 py-1 border border-gray-600 focus:border-blue-500 focus:outline-none">
-        <option value="">All categories</option>
-        {% for cat in categories %}
-        {% if cat.category_id|string in (saved_filter or selected_cats) %}
-        <option value="{{ cat.category_id }}" {% if cats_param == cat.category_id|string %}selected{% endif %}>
-          {{ cat.category_name }}
-        </option>
-        {% endif %}
+      <!-- Category filter multi-select dropdown -->
+      <div class="inline-block" id="category-dropdown">
+        <button type="button" id="category-dropdown-btn"
+                class="bg-gray-700 text-sm rounded px-2 py-1 border border-gray-600 hover:border-gray-500 focus:border-blue-500 focus:outline-none inline-flex items-center gap-1">
+          <span>{% if effective_cats.split(',') | length < ordered_filter_cats | length %}{{ effective_cats.split(',') | length }} selected{% else %}All categories{% endif %}</span>
+          <svg class="w-3 h-3 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+      </div>
+      <!-- Dropdown menu (portal, positioned via JS) -->
+      <div id="category-dropdown-menu" class="hidden fixed top-0 left-0 bg-gray-800 border border-gray-600 rounded shadow-lg z-[9999] min-w-[200px] max-h-[300px] overflow-y-auto">
+        <div class="p-2 border-b border-gray-700 flex gap-2">
+          <button type="button" onclick="document.querySelectorAll('#category-dropdown-menu .cat-checkbox').forEach(c=>c.checked=true)" class="text-xs text-blue-400 hover:text-blue-300">All</button>
+          <button type="button" onclick="document.querySelectorAll('#category-dropdown-menu .cat-checkbox').forEach(c=>c.checked=false)" class="text-xs text-blue-400 hover:text-blue-300">None</button>
+        </div>
+        {% for cat in ordered_filter_cats %}
+        <label class="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-700 cursor-pointer text-sm">
+          <input type="checkbox" class="cat-checkbox rounded bg-gray-600 border-gray-500 text-blue-500 focus:ring-blue-500 focus:ring-offset-0"
+                 value="{{ cat.category_id }}"
+                 {% if cat.category_id|string in effective_cats.split(',') %}checked{% endif %}>
+          <span class="truncate">{{ cat.category_name }}</span>
+        </label>
         {% endfor %}
-      </select>
+      </div>
+      <script>
+      function applyDesktopFilter() {
+        var menu = document.getElementById('category-dropdown-menu');
+        var checks = menu ? menu.querySelectorAll('.cat-checkbox') : [];
+        var selected = [];
+        for (var i = 0; i < checks.length; i++) {
+          if (checks[i].checked) selected.push(checks[i].value);
+        }
+        var offset = {{ offset }};
+        // Determine URL first - explicit check for "all selected" vs "some/none"
+        var allSelected = checks.length > 0 && selected.length === checks.length;
+        var url = allSelected ? '/guide?offset=' + offset : '/guide?offset=' + offset + '&cats=' + selected.join(',');
+        // Save view preference (fire and forget, don't block navigation)
+        try {
+          fetch('/api/user-prefs', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({guide_selected_cats: allSelected ? null : selected})
+          });
+        } catch (e) {}
+        // Navigate
+        window.location.href = url;
+      }
+      </script>
       <span class="text-xs text-gray-500">({{ total_count | default(channel_count) }} ch)</span>
       <a href="/settings#filters" class="text-xs text-gray-500 hover:text-blue-400">[edit]</a>
       {% endif %}
@@ -98,16 +134,53 @@
     <div class="flex items-center gap-1">
       <span class="text-sm font-bold">Live TV</span>
       {% if saved_filter or selected_cats %}
-      <select id="category-filter-mobile" class="bg-gray-700 text-[10px] rounded px-1 py-0.5 border border-gray-600 max-w-[120px]">
-        <option value="">All</option>
-        {% for cat in categories %}
-        {% if cat.category_id|string in (saved_filter or selected_cats) %}
-        <option value="{{ cat.category_id }}" {% if cats_param == cat.category_id|string %}selected{% endif %}>
-          {{ cat.category_name }}
-        </option>
-        {% endif %}
+      <!-- Mobile category filter multi-select -->
+      <div class="inline-block" id="category-dropdown-mobile">
+        <button type="button" id="category-dropdown-btn-mobile"
+                class="bg-gray-700 text-[10px] rounded px-1 py-0.5 border border-gray-600 inline-flex items-center gap-0.5 max-w-[100px]">
+          <span class="truncate">{% if effective_cats.split(',') | length < ordered_filter_cats | length %}{{ effective_cats.split(',') | length }} sel{% else %}All{% endif %}</span>
+          <svg class="w-2 h-2 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/></svg>
+        </button>
+      </div>
+      <!-- Mobile dropdown menu (portal) -->
+      <div id="category-dropdown-menu-mobile" class="hidden fixed top-0 left-0 bg-gray-800 border border-gray-600 rounded shadow-lg z-[9999] min-w-[160px] max-h-[250px] overflow-y-auto">
+        <div class="p-1.5 border-b border-gray-700 flex gap-2">
+          <button type="button" onclick="document.querySelectorAll('#category-dropdown-menu-mobile .cat-checkbox-mobile').forEach(c=>c.checked=true)" class="text-[10px] text-blue-400">All</button>
+          <button type="button" onclick="document.querySelectorAll('#category-dropdown-menu-mobile .cat-checkbox-mobile').forEach(c=>c.checked=false)" class="text-[10px] text-blue-400">None</button>
+        </div>
+        {% for cat in ordered_filter_cats %}
+        <label class="flex items-center gap-1.5 px-2 py-1 hover:bg-gray-700 cursor-pointer text-[11px]">
+          <input type="checkbox" class="cat-checkbox-mobile rounded bg-gray-600 border-gray-500 text-blue-500 w-3 h-3"
+                 value="{{ cat.category_id }}"
+                 {% if cat.category_id|string in effective_cats.split(',') %}checked{% endif %}>
+          <span class="truncate">{{ cat.category_name }}</span>
+        </label>
         {% endfor %}
-      </select>
+      </div>
+      <script>
+      function applyMobileFilter() {
+        var menu = document.getElementById('category-dropdown-menu-mobile');
+        var checks = menu ? menu.querySelectorAll('.cat-checkbox-mobile') : [];
+        var selected = [];
+        for (var i = 0; i < checks.length; i++) {
+          if (checks[i].checked) selected.push(checks[i].value);
+        }
+        var offset = {{ offset }};
+        // Determine URL first - explicit check for "all selected" vs "some/none"
+        var allSelected = checks.length > 0 && selected.length === checks.length;
+        var url = allSelected ? '/guide?offset=' + offset : '/guide?offset=' + offset + '&cats=' + selected.join(',');
+        // Save view preference (fire and forget, don't block navigation)
+        try {
+          fetch('/api/user-prefs', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({guide_selected_cats: allSelected ? null : selected})
+          });
+        } catch (e) {}
+        // Navigate
+        window.location.href = url;
+      }
+      </script>
       {% endif %}
     </div>
     <div class="flex gap-1">
@@ -255,41 +328,40 @@ const GUIDE_CONFIG = {
   }
 };
 
-// Handle category filter: sync to server when URL has cats (but not temp filters)
+// Category multi-select dropdown toggle
 (function() {
-  const urlCats = '{{ cats_param }}';
-  const urlParams = new URLSearchParams(window.location.search);
-  const isTempFilter = urlParams.get('filter') === '1';
+  function setupDropdown(btnId, menuId, applyFn) {
+    const btn = document.getElementById(btnId);
+    const menu = document.getElementById(menuId);
+    if (!btn || !menu) return;
 
-  // Only sync to saved filter if it's not a temporary dropdown filter
-  if (urlCats && !isTempFilter) {
-    fetch('/settings/guide-filter', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({cats: urlCats.split(',')})
+    // Move menu to body to avoid container clipping
+    document.body.appendChild(menu);
+
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      if (menu.classList.contains('hidden')) {
+        const rect = btn.getBoundingClientRect();
+        menu.style.top = rect.bottom + 4 + 'px';
+        menu.style.left = rect.left + 'px';
+        menu.classList.remove('hidden');
+      } else {
+        // Closing via button click - apply
+        menu.classList.add('hidden');
+        applyFn();
+      }
+    });
+
+    document.addEventListener('click', (e) => {
+      if (!menu.contains(e.target) && !btn.contains(e.target) && !menu.classList.contains('hidden')) {
+        menu.classList.add('hidden');
+        applyFn();
+      }
     });
   }
-})();
 
-// Category dropdown filter
-(function() {
-  function handleCategoryChange(e) {
-    const catId = e.target.value;
-    const offset = {{ offset }};
-    if (catId) {
-      // Filter to single category - add filter=1 to indicate temp filter
-      window.location.href = `/guide?offset=${offset}&cats=${catId}&filter=1`;
-    } else {
-      // "All" selected - use saved filter (no cats param)
-      window.location.href = `/guide?offset=${offset}`;
-    }
-  }
-
-  const dropdown = document.getElementById('category-filter');
-  const dropdownMobile = document.getElementById('category-filter-mobile');
-
-  if (dropdown) dropdown.addEventListener('change', handleCategoryChange);
-  if (dropdownMobile) dropdownMobile.addEventListener('change', handleCategoryChange);
+  setupDropdown('category-dropdown-btn', 'category-dropdown-menu', applyDesktopFilter);
+  setupDropdown('category-dropdown-btn-mobile', 'category-dropdown-menu-mobile', applyMobileFilter);
 })();
 
 // Auto-refresh when EPG finishes loading
@@ -317,9 +389,10 @@ const GUIDE_CONFIG = {
 })();
 {% endif %}
 
-// Initialize virtual scrolling if we have more than initial batch
+// Initialize virtual scrolling if enabled and we have more than initial batch
 (function() {
-  if (GUIDE_CONFIG.totalRows > GUIDE_CONFIG.initialRows.length && GUIDE_CONFIG.totalRows > 0) {
+  const virtualScrollEnabled = {{ virtual_scroll | default(true) | tojson }};
+  if (virtualScrollEnabled && GUIDE_CONFIG.totalRows > GUIDE_CONFIG.initialRows.length && GUIDE_CONFIG.totalRows > 0) {
     const container = document.querySelector('.guide-container');
     if (container) {
       window.virtualGuide = new VirtualGuide({

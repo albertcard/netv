@@ -338,13 +338,15 @@ class VirtualGuide {
     this.needsRecheck = false;
 
     try {
-      // Don't pass cats - server uses saved user filter
-      // This keeps URLs short and avoids length limits
       const params = new URLSearchParams({
         start: overallStart,
         count: overallEnd - overallStart,
         offset: this.offset
       });
+      // Pass cats if set (for temporary dropdown filters)
+      if (this.cats) {
+        params.set('cats', this.cats);
+      }
 
       const resp = await fetch(`/api/guide/rows?${params}`, {
         signal: controller.signal
