@@ -3,20 +3,35 @@
 set -e
 
 MODEL_DIR="${MODEL_DIR:-$HOME/ffmpeg_build/models}"
+VENV_DIR="${MODEL_DIR}/.venv"
+# Must match LIBTORCH_VERSION in install-ffmpeg.sh
+TORCH_VERSION="2.5.0"
+
 mkdir -p "$MODEL_DIR"
 
-# Check for Python and required packages
-check_python() {
+# Set up Python venv with correct torch version (must match ffmpeg's libtorch)
+setup_python() {
   if ! command -v python3 &> /dev/null; then
     echo "Error: python3 is required"
     exit 1
   fi
 
-  python3 -c "import torch" 2>/dev/null || {
-    echo "Error: PyTorch is required. Install with:"
-    echo "  pip install torch"
-    exit 1
-  }
+  # Check if venv exists with correct version
+  if [ -f "$VENV_DIR/torch_version" ] && [ "$(cat "$VENV_DIR/torch_version")" = "$TORCH_VERSION" ]; then
+    echo "Using existing venv with torch $TORCH_VERSION"
+    source "$VENV_DIR/bin/activate"
+    return
+  fi
+
+  echo "Setting up Python venv with torch $TORCH_VERSION (must match ffmpeg's libtorch)..."
+  rm -rf "$VENV_DIR"
+  python3 -m venv "$VENV_DIR"
+  source "$VENV_DIR/bin/activate"
+  pip install -q --upgrade pip
+  # Use CUDA 12.4 variant to match ffmpeg's libtorch (cu124)
+  pip install -q "torch==$TORCH_VERSION" --index-url https://download.pytorch.org/whl/cu124
+  echo "$TORCH_VERSION" > "$VENV_DIR/torch_version"
+  echo "Installed torch $TORCH_VERSION"
 }
 
 # Download Real-ESRGAN weights
@@ -255,7 +270,7 @@ echo "Real-ESRGAN Model Setup for ffmpeg"
 echo "==================================="
 echo ""
 
-check_python
+setup_python
 download_models
 convert_to_torchscript
 
