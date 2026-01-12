@@ -169,6 +169,9 @@ BUILD_LIBX264=${BUILD_LIBX264:-1}        # H.264 encoder (apt: 8-bit only, src: 
 # FFmpeg version: "snapshot" for latest git, or specific version like "7.1"
 FFMPEG_VERSION=${FFMPEG_VERSION:-snapshot}
 
+# Skip apt dependency installation (use if deps already installed, avoids sudo)
+SKIP_DEPS=${SKIP_DEPS:-0}
+
 # NVIDIA CUDA setup (only used if ENABLE_NVIDIA_CUDA=1)
 # CUDA_VERSION options:
 #   "auto"    - (default) use installed CUDA if available, else install latest
@@ -251,7 +254,9 @@ APT_PACKAGES=(
 [ "$BUILD_LIBVA" != "1" ] && APT_PACKAGES+=(libva-dev)
 [ "$BUILD_LIBJXL" != "1" ] && APT_PACKAGES+=(libjxl-dev)
 [ "$BUILD_LIBX264" != "1" ] && APT_PACKAGES+=(libx264-dev)
-sudo apt-get update && sudo apt-get install -y "${APT_PACKAGES[@]}"
+if [ "$SKIP_DEPS" != "1" ]; then
+    sudo apt-get update && sudo apt-get install -y "${APT_PACKAGES[@]}"
+fi
 
 
 CUDA_FLAGS=()
@@ -271,31 +276,33 @@ if [ "$ENABLE_NVIDIA_CUDA" = "1" ]; then
     fi
 
     # Add CUDA repo if not present or if we need to install
-    if [ "$CUDA_VERSION" = "auto" ] || ! command -v nvcc &> /dev/null; then
-        if ! dpkg -l cuda-keyring 2>/dev/null | grep -q ^ii; then
-            # Detect Ubuntu version for correct CUDA repo (24.04 -> ubuntu2404, 25.04 -> ubuntu2504)
-            UBUNTU_VERSION=$(grep VERSION_ID /etc/os-release | cut -d'"' -f2 | tr -d '.')
-            CUDA_REPO_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-keyring_1.1-1_all.deb"
-            wget -q "$CUDA_REPO_URL" -O cuda-keyring.deb
-            sudo dpkg -i cuda-keyring.deb
-            rm cuda-keyring.deb
-            sudo apt-get update
+    if [ "$SKIP_DEPS" != "1" ]; then
+        if [ "$CUDA_VERSION" = "auto" ] || ! command -v nvcc &> /dev/null; then
+            if ! dpkg -l cuda-keyring 2>/dev/null | grep -q ^ii; then
+                # Detect Ubuntu version for correct CUDA repo (24.04 -> ubuntu2404, 25.04 -> ubuntu2504)
+                UBUNTU_VERSION=$(grep VERSION_ID /etc/os-release | cut -d'"' -f2 | tr -d '.')
+                CUDA_REPO_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-keyring_1.1-1_all.deb"
+                wget -q "$CUDA_REPO_URL" -O cuda-keyring.deb
+                sudo dpkg -i cuda-keyring.deb
+                rm cuda-keyring.deb
+                sudo apt-get update
+            fi
+
+            # Get latest CUDA version if still auto
+            if [ "$CUDA_VERSION" = "auto" ]; then
+                CUDA_VERSION=$(apt-cache search '^cuda-nvcc-[0-9]' | sed 's/cuda-nvcc-//' | cut -d' ' -f1 | sort -V | tail -1)
+                if [ -z "$CUDA_VERSION" ]; then
+                    echo "Error: No CUDA packages found. Install CUDA repo first or set CUDA_VERSION manually." >&2
+                    exit 1
+                fi
+                echo "Will install latest CUDA version: $CUDA_VERSION"
+            fi
         fi
 
-        # Get latest CUDA version if still auto
-        if [ "$CUDA_VERSION" = "auto" ]; then
-            CUDA_VERSION=$(apt-cache search '^cuda-nvcc-[0-9]' | sed 's/cuda-nvcc-//' | cut -d' ' -f1 | sort -V | tail -1)
-            if [ -z "$CUDA_VERSION" ]; then
-                echo "Error: No CUDA packages found. Install CUDA repo first or set CUDA_VERSION manually." >&2
-                exit 1
-            fi
-            echo "Will install latest CUDA version: $CUDA_VERSION"
-        fi
+        # Install CUDA packages
+        sudo apt-get install -y libffmpeg-nvenc-dev cuda-nvcc-$CUDA_VERSION cuda-cudart-dev-$CUDA_VERSION
     fi
     echo "Using CUDA version: $CUDA_VERSION"
-
-    # Install CUDA packages
-    sudo apt-get install -y libffmpeg-nvenc-dev cuda-nvcc-$CUDA_VERSION cuda-cudart-dev-$CUDA_VERSION
 
     # Detect CUDA installation path
     CUDA_VERSION_DOT=$(echo "$CUDA_VERSION" | tr '-' '.')
@@ -312,39 +319,41 @@ if [ "$ENABLE_NVIDIA_CUDA" = "1" ]; then
     # Patch CUDA headers for glibc 2.42+ compatibility (Ubuntu 25.04+)
     # glibc 2.42 added rsqrt/rsqrtf to mathcalls.h which conflicts with CUDA's definitions
     # This causes "exception specification is incompatible" errors during nvcc compilation
-    CUDA_MATH_HEADER="$CUDA_PATH/targets/x86_64-linux/include/crt/math_functions.h"
-    if [ -f "$CUDA_MATH_HEADER" ]; then
-        GLIBC_VERSION=$(ldd --version | head -1 | grep -oP '\d+\.\d+$')
-        GLIBC_MAJOR=$(echo "$GLIBC_VERSION" | cut -d. -f1)
-        GLIBC_MINOR=$(echo "$GLIBC_VERSION" | cut -d. -f2)
+    if [ "$SKIP_DEPS" != "1" ]; then
+        CUDA_MATH_HEADER="$CUDA_PATH/targets/x86_64-linux/include/crt/math_functions.h"
+        if [ -f "$CUDA_MATH_HEADER" ]; then
+            GLIBC_VERSION=$(ldd --version | head -1 | grep -oP '\d+\.\d+$')
+            GLIBC_MAJOR=$(echo "$GLIBC_VERSION" | cut -d. -f1)
+            GLIBC_MINOR=$(echo "$GLIBC_VERSION" | cut -d. -f2)
 
-        # Only patch if glibc >= 2.42 and patch not already applied
-        if [ "$GLIBC_MAJOR" -gt 2 ] || ([ "$GLIBC_MAJOR" -eq 2 ] && [ "$GLIBC_MINOR" -ge 42 ]); then
-            # Check for our patch OR NVIDIA's fix (they use __NV_GLIBC_PROVIDES_IEC_60559_FUNCS for similar issues)
-            if grep -q "rsqrt" "$CUDA_MATH_HEADER" && \
-               ! grep -B2 "double[[:space:]]*rsqrt(double" "$CUDA_MATH_HEADER" | grep -q "GLIBC"; then
-                echo "Patching CUDA headers for glibc $GLIBC_VERSION compatibility..."
-                # Backup original if no backup exists
-                [ ! -f "${CUDA_MATH_HEADER}.bak" ] && sudo cp "$CUDA_MATH_HEADER" "${CUDA_MATH_HEADER}.bak"
-                # Add guards around rsqrt declaration (prevent conflict with glibc's rsqrt)
-                sudo sed -i '/extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double[[:space:]]*rsqrt(double/c\
+            # Only patch if glibc >= 2.42 and patch not already applied
+            if [ "$GLIBC_MAJOR" -gt 2 ] || ([ "$GLIBC_MAJOR" -eq 2 ] && [ "$GLIBC_MINOR" -ge 42 ]); then
+                # Check for our patch OR NVIDIA's fix (they use __NV_GLIBC_PROVIDES_IEC_60559_FUNCS for similar issues)
+                if grep -q "rsqrt" "$CUDA_MATH_HEADER" && \
+                   ! grep -B2 "double[[:space:]]*rsqrt(double" "$CUDA_MATH_HEADER" | grep -q "GLIBC"; then
+                    echo "Patching CUDA headers for glibc $GLIBC_VERSION compatibility..."
+                    # Backup original if no backup exists
+                    [ ! -f "${CUDA_MATH_HEADER}.bak" ] && sudo cp "$CUDA_MATH_HEADER" "${CUDA_MATH_HEADER}.bak"
+                    # Add guards around rsqrt declaration (prevent conflict with glibc's rsqrt)
+                    sudo sed -i '/extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double[[:space:]]*rsqrt(double/c\
 #if !(defined(__GLIBC__) \&\& __GLIBC_USE_IEC_60559_FUNCS_EXT_C23)\
 extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ double                 rsqrt(double x);\
 #endif' "$CUDA_MATH_HEADER"
-                # Add guards around rsqrtf declaration
-                sudo sed -i '/extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float[[:space:]]*rsqrtf(float/c\
+                    # Add guards around rsqrtf declaration
+                    sudo sed -i '/extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float[[:space:]]*rsqrtf(float/c\
 #if !(defined(__GLIBC__) \&\& __GLIBC_USE_IEC_60559_FUNCS_EXT_C23)\
 extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  rsqrtf(float x);\
 #endif' "$CUDA_MATH_HEADER"
-                # Verify patch was applied
-                if grep -B2 "double[[:space:]]*rsqrt(double" "$CUDA_MATH_HEADER" | grep -q "GLIBC"; then
-                    echo "CUDA header patched successfully"
+                    # Verify patch was applied
+                    if grep -B2 "double[[:space:]]*rsqrt(double" "$CUDA_MATH_HEADER" | grep -q "GLIBC"; then
+                        echo "CUDA header patched successfully"
+                    else
+                        echo "Warning: CUDA header patch may have failed - rsqrt declaration not found" >&2
+                        echo "CUDA version may have different header format. Check $CUDA_MATH_HEADER" >&2
+                    fi
                 else
-                    echo "Warning: CUDA header patch may have failed - rsqrt declaration not found" >&2
-                    echo "CUDA version may have different header format. Check $CUDA_MATH_HEADER" >&2
+                    echo "CUDA headers already patched for glibc compatibility"
                 fi
-            else
-                echo "CUDA headers already patched for glibc compatibility"
             fi
         fi
     fi

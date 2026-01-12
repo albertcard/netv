@@ -4,9 +4,9 @@ set -e
 
 MODEL_DIR="${MODEL_DIR:-$HOME/ffmpeg_build/models}"
 VENV_DIR="${MODEL_DIR}/.venv"
-# Must match LIBLIBTORCH_VERSION used in install-ffmpeg.sh
-# For RTX 50-series (Blackwell): LIBLIBTORCH_VERSION=2.9.0 LIBTORCH_VARIANT=cu130
-LIBLIBTORCH_VERSION="${LIBLIBTORCH_VERSION:-2.5.0}"
+# Must match LIBTORCH_VERSION used in install-ffmpeg.sh
+# For RTX 50-series (Blackwell): LIBTORCH_VERSION=2.9.0 LIBTORCH_VARIANT=cu130
+LIBTORCH_VERSION="${LIBTORCH_VERSION:-2.5.0}"
 LIBTORCH_VARIANT="${LIBTORCH_VARIANT:-cu124}"
 
 mkdir -p "$MODEL_DIR"
@@ -18,21 +18,36 @@ setup_python() {
     exit 1
   fi
 
-  # Check if venv exists with correct version
-  if [ -f "$VENV_DIR/torch_version" ] && [ "$(cat "$VENV_DIR/torch_version")" = "$LIBTORCH_VERSION" ]; then
-    echo "Using existing venv with torch $LIBTORCH_VERSION"
+  local EXPECTED="${LIBTORCH_VERSION}+${LIBTORCH_VARIANT}"
+  local CURRENT=""
+
+  # Check actual installed torch version (not just the marker file)
+  if [ -d "$VENV_DIR" ] && [ -f "$VENV_DIR/bin/activate" ]; then
+    CURRENT=$(source "$VENV_DIR/bin/activate" && python3 -c "import torch; print(torch.__version__)" 2>/dev/null || echo "")
+  fi
+
+  if [ "$CURRENT" = "$EXPECTED" ]; then
+    echo "Using existing venv with torch $CURRENT"
     source "$VENV_DIR/bin/activate"
     return
   fi
 
-  echo "Setting up Python venv with torch $LIBTORCH_VERSION (must match ffmpeg's libtorch)..."
+  echo "Setting up Python venv with torch $LIBTORCH_VERSION ($LIBTORCH_VARIANT)..."
+  [ -n "$CURRENT" ] && echo "  (replacing torch $CURRENT)"
   rm -rf "$VENV_DIR"
   python3 -m venv "$VENV_DIR"
   source "$VENV_DIR/bin/activate"
   pip install -q --upgrade pip
   pip install -q "torch==$LIBTORCH_VERSION" --index-url "https://download.pytorch.org/whl/$LIBTORCH_VARIANT"
-  echo "$LIBTORCH_VERSION" > "$VENV_DIR/torch_version"
-  echo "Installed torch $LIBTORCH_VERSION ($LIBTORCH_VARIANT)"
+
+  # Verify installation
+  INSTALLED=$(python3 -c "import torch; print(torch.__version__)")
+  if [ "$INSTALLED" != "$EXPECTED" ]; then
+    echo "ERROR: Expected torch $EXPECTED but got $INSTALLED"
+    echo "The requested version may not exist for this CUDA variant."
+    exit 1
+  fi
+  echo "Installed torch $INSTALLED"
 }
 
 # Download Real-ESRGAN weights
@@ -65,6 +80,11 @@ download_models() {
 convert_to_torchscript() {
   echo "Converting models to TorchScript..."
 
+  # Force reconvert if FORCE_RECONVERT=1
+  if [ "${FORCE_RECONVERT:-0}" = "1" ]; then
+    rm -f "$MODEL_DIR"/*.pt
+  fi
+
   python3 << 'PYTHON_SCRIPT'
 import os
 import sys
@@ -72,8 +92,9 @@ import torch
 
 MODEL_DIR = os.environ.get('MODEL_DIR', os.path.expanduser('~/ffmpeg_build/models'))
 
+print(f"Using torch {torch.__version__}")
+
 # RRDBNet architecture (from Real-ESRGAN/BasicSR)
-# Simplified version that matches the pretrained weights
 class ResidualDenseBlock(torch.nn.Module):
     def __init__(self, num_feat=64, num_grow_ch=32):
         super().__init__()
@@ -143,39 +164,31 @@ class RRDBNet(torch.nn.Module):
 
 
 # SRVGGNetCompact - lightweight architecture for real-time video SR
-# Much faster than RRDBNet, designed for video upscaling
 class SRVGGNetCompact(torch.nn.Module):
     def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=32, upscale=4):
         super().__init__()
         self.upscale = upscale
 
-        # Body contains interleaved Conv2d and PReLU layers
         self.body = torch.nn.ModuleList()
-        # First conv
         self.body.append(torch.nn.Conv2d(num_in_ch, num_feat, 3, 1, 1))
-        # Body: conv + prelu pairs
         for _ in range(num_conv):
             self.body.append(torch.nn.PReLU(num_parameters=num_feat))
             self.body.append(torch.nn.Conv2d(num_feat, num_feat, 3, 1, 1))
-        # Last activation + upsampler conv
         self.body.append(torch.nn.PReLU(num_parameters=num_feat))
         self.body.append(torch.nn.Conv2d(num_feat, num_out_ch * upscale * upscale, 3, 1, 1))
 
-        # Pixel shuffle for upsampling
         self.upsampler = torch.nn.PixelShuffle(upscale)
 
     def forward(self, x):
-        out = self.body[0](x)  # First conv
+        out = self.body[0](x)
         for layer in self.body[1:]:
             out = layer(out)
         out = self.upsampler(out)
-        # Skip connection via bilinear upsampling
         base = torch.nn.functional.interpolate(x, scale_factor=self.upscale, mode='bilinear', align_corners=False)
         return out + base
 
 
 def convert_rrdb_model(pth_path, scale, num_block=23):
-    """Convert RRDBNet model to TorchScript."""
     output_path = pth_path.replace('.pth', '.pt')
 
     if os.path.exists(output_path):
@@ -204,7 +217,6 @@ def convert_rrdb_model(pth_path, scale, num_block=23):
 
 
 def convert_compact_model(pth_path, upscale=4, num_conv=16, num_feat=64):
-    """Convert SRVGGNetCompact model to TorchScript (fast real-time models)."""
     output_path = pth_path.replace('.pth', '.pt')
 
     if os.path.exists(output_path):
@@ -224,7 +236,6 @@ def convert_compact_model(pth_path, upscale=4, num_conv=16, num_feat=64):
     model.load_state_dict(state_dict, strict=True)
     model.eval()
 
-    # Use small input for tracing
     dummy_input = torch.randn(1, 3, 64, 64)
     with torch.no_grad():
         traced = torch.jit.trace(model, dummy_input)
@@ -251,7 +262,7 @@ for filename, scale, num_block in rrdb_models:
 
 # Convert compact models (fast, real-time capable)
 compact_models = [
-    ('realesr-general-x4v3.pth', 4, 32, 64),    # upscale, num_conv, num_feat
+    ('realesr-general-x4v3.pth', 4, 32, 64),
 ]
 
 for filename, upscale, num_conv, num_feat in compact_models:
@@ -281,4 +292,3 @@ echo ""
 setup_python
 download_models
 convert_to_torchscript
-

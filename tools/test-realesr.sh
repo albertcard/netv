@@ -2,6 +2,9 @@
 # Test Real-ESRGAN super-resolution performance via ffmpeg libtorch backend
 set -e
 
+# Reset terminal on exit (ffmpeg crash can leave terminal in bad state)
+trap 'stty sane 2>/dev/null' EXIT
+
 FFMPEG="${FFMPEG:-$HOME/.local/bin/ffmpeg}"
 MODEL_DIR="${MODEL_DIR:-$HOME/ffmpeg_build/models}"
 MODEL="${MODEL:-realesr-general-x4v3.pt}"
