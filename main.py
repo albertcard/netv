@@ -118,6 +118,24 @@ APP_DIR = pathlib.Path(__file__).parent
 TEMPLATES = Jinja2Templates(directory=APP_DIR / "templates")
 TEMPLATES.env.auto_reload = True
 
+# Super-resolution model path (compact model for real-time processing)
+SR_MODEL_PATH = pathlib.Path(
+    os.environ.get(
+        "SR_MODEL_PATH", pathlib.Path.home() / "ffmpeg_build/models/realesr-general-x4v3.pt"
+    )
+)
+
+# LibTorch library path for ffmpeg DNN backend (optional - ffmpeg has rpath baked in)
+LIBTORCH_LIB_PATH = os.environ.get(
+    "LIBTORCH_LIB_PATH",
+    str(pathlib.Path.home() / "ffmpeg_sources/libtorch/lib"),
+)
+
+
+def is_sr_available() -> bool:
+    """Check if super-resolution is available (model exists, ffmpeg has libtorch via rpath)."""
+    return SR_MODEL_PATH.exists()
+
 
 def _logo_url_filter(url: str) -> str:
     """Wrap external logo URLs through /api/logo proxy."""
@@ -164,7 +182,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.info("Pruned %d expired EPG programs", pruned)
 
     # Initialize transcoding module with settings callback
-    ffmpeg_command.init(load_server_settings)
+    ffmpeg_command.init(
+        load_server_settings,
+        sr_model_path=str(SR_MODEL_PATH) if is_sr_available() else "",
+        sr_libtorch_path=LIBTORCH_LIB_PATH if is_sr_available() else "",
+    )
 
     # Kill orphaned ffmpeg processes
     try:
@@ -2082,6 +2104,8 @@ async def settings_page(request: Request, user: Annotated[dict, Depends(require_
             "user_agent_preset": server_settings.get("user_agent_preset", "default"),
             "user_agent_custom": server_settings.get("user_agent_custom", ""),
             "available_encoders": AVAILABLE_ENCODERS,
+            "sr_available": is_sr_available(),
+            "sr_mode": server_settings.get("sr_mode", "off"),
             "all_users": auth.get_users_with_admin(),
             "all_groups": _build_all_groups(),
             "current_user": username,
@@ -2609,9 +2633,13 @@ async def settings_transcode(
     probe_live: Annotated[str | None, Form()] = None,
     probe_movies: Annotated[str | None, Form()] = None,
     probe_series: Annotated[str | None, Form()] = None,
+    sr_mode: Annotated[str, Form()] = "off",
 ):
     settings = load_server_settings()
     settings["transcode_mode"] = transcode_mode
+    settings["sr_mode"] = (
+        sr_mode if sr_mode in ("off", "enhance", "upscale_1080", "upscale_4k") else "off"
+    )
     settings["transcode_hw"] = transcode_hw
     settings["max_resolution"] = max_resolution
     settings["quality"] = quality if quality in ("high", "medium", "low") else "high"

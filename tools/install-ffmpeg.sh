@@ -695,6 +695,15 @@ if [ "$ENABLE_TORCH" = "1" ]; then
 
     # Create pkg-config file for libtorch (FFmpeg configure uses pkg-config for detection)
     mkdir -p "$BUILD_DIR/lib/pkgconfig"
+    # Include CUDA libs if using CUDA variant
+    if [[ "$TORCH_VARIANT" == cu* ]]; then
+        TORCH_LIBS="-ltorch -lc10 -ltorch_cpu -ltorch_cuda -lc10_cuda"
+        # Needed for ffmpeg extra-libs to ensure libtorch_cuda is linked (not just dlopen'd)
+        TORCH_EXTRA_LIBS="-lc10_cuda -ltorch_cuda"
+    else
+        TORCH_LIBS="-ltorch -lc10 -ltorch_cpu"
+        TORCH_EXTRA_LIBS=""
+    fi
     cat > "$BUILD_DIR/lib/pkgconfig/libtorch.pc" << PCEOF
 prefix=$LIBTORCH_DIR
 exec_prefix=\${prefix}
@@ -704,10 +713,10 @@ includedir=\${prefix}/include
 Name: libtorch
 Description: PyTorch C++ library
 Version: $LIBTORCH_VERSION
-Libs: -L\${libdir} -ltorch -lc10 -ltorch_cpu
+Libs: -L\${libdir} $TORCH_LIBS
 Cflags: -I\${includedir} -I\${includedir}/torch/csrc/api/include -std=c++17
 PCEOF
-    echo "Created libtorch.pc for pkg-config detection"
+    echo "Created libtorch.pc for pkg-config detection (variant: $TORCH_VARIANT)"
 fi
 
 # ffmpeg
@@ -727,6 +736,27 @@ if [ ! -d "$FFMPEG_DIR" ]; then
         rm -f "ffmpeg-${FFMPEG_VERSION}.tar.xz"
     fi
 fi
+
+# Patch ffmpeg's torch backend to support CUDA (upstream only supports CPU/XPU)
+if [ "$ENABLE_TORCH" = "1" ]; then
+    TORCH_BACKEND="$FFMPEG_DIR/libavfilter/dnn/dnn_backend_torch.cpp"
+    if [ -f "$TORCH_BACKEND" ] && ! grep -q "device.is_cuda()" "$TORCH_BACKEND"; then
+        echo "Patching ffmpeg torch backend for CUDA support..."
+        # Add CUDA device support between XPU and the catch-all error
+        sed -i '/at::detail::getXPUHooks().initXPU();/a\
+    } else if (device.is_cuda()) {\
+        if (!at::cuda::is_available()) {\
+            av_log(ctx, AV_LOG_ERROR, "No CUDA device found\\n");\
+            goto fail;\
+        }' "$TORCH_BACKEND"
+        # Add required CUDA header
+        if ! grep -q "#include <ATen/cuda/CUDAContext.h>" "$TORCH_BACKEND"; then
+            sed -i '/#include <torch\/torch.h>/a #include <ATen/cuda/CUDAContext.h>' "$TORCH_BACKEND"
+        fi
+        echo "Torch CUDA patch applied"
+    fi
+fi
+
 cd "$FFMPEG_DIR" && \
 # Build configure flags
 # MARCH=native for CPU-specific optimizations (opt-in, not portable)
@@ -744,7 +774,11 @@ if [ "$BUILD_LIBPLACEBO" = "1" ]; then
 fi
 if [ "$ENABLE_TORCH" = "1" ]; then
     # LibTorch needs C++ flags (FFmpeg uses require_cxx for libtorch detection)
+    # Include CUDA path for CUDA torch support
     EXTRA_CXXFLAGS="-I$LIBTORCH_PATH/include -I$LIBTORCH_PATH/include/torch/csrc/api/include"
+    if [ "$ENABLE_NVIDIA_CUDA" = "1" ]; then
+        EXTRA_CXXFLAGS="$EXTRA_CXXFLAGS -I$CUDA_PATH/include"
+    fi
     EXTRA_LDFLAGS="$EXTRA_LDFLAGS -L$LIBTORCH_PATH/lib -Wl,-rpath,$LIBTORCH_PATH/lib"
 fi
 CONFIGURE_CMD=(
@@ -754,7 +788,7 @@ CONFIGURE_CMD=(
     --extra-cflags="$EXTRA_CFLAGS"
     --extra-cxxflags="$EXTRA_CXXFLAGS"
     --extra-ldflags="$EXTRA_LDFLAGS"
-    --extra-libs="-lpthread -lm"
+    --extra-libs="-lpthread -lm${TORCH_EXTRA_LIBS:+ $TORCH_EXTRA_LIBS}"
     --ld="g++"
     --bindir="$BIN_DIR"
     --disable-debug
