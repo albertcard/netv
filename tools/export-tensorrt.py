@@ -7,11 +7,11 @@ engines (.engine files) that can be loaded by FFmpeg's TensorRT DNN backend.
 Supports dynamic input shapes - a single engine handles a range of resolutions.
 
 Usage:
-    # Export with dynamic shapes (default: 256x270 to 2560x1280)
+    # Export with dynamic shapes (default: 270p to 1280p)
     python export-tensorrt.py --output model.engine
 
-    # Export with custom dynamic range
-    python export-tensorrt.py --min 256x270 --opt 1280x720 --max 2560x1280
+    # Export with custom height range
+    python export-tensorrt.py --min-height 360 --max-height 1080
 
     # Export from custom model
     python export-tensorrt.py --model /path/to/model.pth
@@ -37,7 +37,7 @@ def get_model(model_path=None):
         try:
             model = torch.jit.load(model_path, map_location='cpu')
             print(f"Loaded TorchScript model from {model_path}")
-            return model, True
+            return model
         except:
             pass
 
@@ -53,7 +53,7 @@ def get_model(model_path=None):
             model.load_state_dict(state_dict)
             model.eval()
             print(f"Loaded RRDBNet model from {model_path}")
-            return model, False
+            return model
         except ImportError:
             pass
 
@@ -69,7 +69,7 @@ def get_model(model_path=None):
             model.load_state_dict(state_dict)
             model.eval()
             print(f"Loaded SRVGGNetCompact model from {model_path}")
-            return model, False
+            return model
         except ImportError:
             pass
 
@@ -90,7 +90,7 @@ def get_model(model_path=None):
     return get_model(model_path)
 
 
-def export_onnx(model, opt_shape, onnx_path, is_torchscript=False):
+def export_onnx(model, opt_shape, onnx_path):
     """Export model to ONNX format with dynamic axes."""
     import torch
 
@@ -230,7 +230,7 @@ def main():
     print("=" * 60)
     print("Real-ESRGAN to TensorRT Export (Dynamic Shapes)")
     print("=" * 60)
-    model, _ = get_model(args.model)
+    model = get_model(args.model)
 
     # Export to ONNX
     if args.keep_onnx:
