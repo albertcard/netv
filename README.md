@@ -58,8 +58,6 @@ Extensively optimized for minimal latency and CPU usage:
 - **Session recovery** - VOD sessions survive restarts, resume where you left off
 - **HTTPS passthrough** - Auto-proxies HTTP streams when behind HTTPS
 
-Hardware transcoding is auto-detected. Check Settings to see available encoders.
-
 ### 4K AI Upscaling
 
 Real-time 4x upscaling using Real-ESRGAN via TensorRT. Transforms 480p/720p/1080p
@@ -71,27 +69,8 @@ content to pristine 4K at 85fps (RTX 5090). Perfect for older shows and low-bitr
 | ![Before](screenshots/ai-upscale_cleopatra_disabled.png) | ![After](screenshots/ai-upscale_cleopatra_enabled.png) |
 | ![Before](screenshots/ai-upscale_batman_disabled.png) | ![After](screenshots/ai-upscale_batman_enabled.png) |
 
-Requires NVIDIA GPU and [Dockerfile.ai_upscale](#ai-upscale-image-nvidia-gpu) build.
+Requires NVIDIA GPU and the [AI Upscale Docker image](#ai-upscale-image-nvidia-gpu).
 The Settings page shows AI Upscale options when TensorRT engines are available.
-
-### Hardware Support
-
-- **Intel/AMD (VAAPI)**: Works automatically if `/dev/dri` exists.
-- **NVIDIA**: Requires [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-  and **driver 570+** (NVENC API 13): `docker compose --profile nvidia up -d`
-
-  <details>
-  <summary>Stuck on driver 550? (Synology, Unraid, etc.)</summary>
-
-  The pre-built image requires driver 570+. For older drivers, build with CUDA 12.4:
-  ```bash
-  docker build --build-arg CUDA_VERSION=12-4 -f Dockerfile.ffmpeg -t netv-ffmpeg:local .
-  docker build --build-arg FFMPEG_IMAGE=netv-ffmpeg:local -t netv:local .
-  ```
-  Then update your `docker-compose.yml` to use `netv:local` instead of the ghcr image.
-  </details>
-- **No GPU / VPS**: If `/dev/dri` doesn't exist, comment out the `devices` section
-  in `docker-compose.yml` or compose will fail to start
 
 ## Alternatives
 
@@ -369,6 +348,27 @@ Then add `tools/ota.m3u` as an M3U source in neTV settings.
 
 And set up a cron job to refresh the guide daily (e.g.,
 `0 5 * * *  /usr/bin/python3 /path/to/netv/tools/zap2xml.py --zip 90210 && cp /path/to/netv/tools/xmltv.xml /var/www/html/`).
+
+### How do I enable hardware transcoding?
+
+Hardware transcoding is auto-detected. Check Settings to see available encoders.
+
+- **Intel/AMD (VAAPI)**: Works automatically if `/dev/dri` exists.
+- **NVIDIA**: Requires [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+  and **driver 570+** (NVENC API 13): `docker compose --profile nvidia up -d`
+
+  <details>
+  <summary>Stuck on driver 550? (Synology, Unraid, etc.)</summary>
+
+  The pre-built image requires driver 570+. For older drivers, build with CUDA 12.4:
+  ```bash
+  docker build --build-arg CUDA_VERSION=12-4 -f Dockerfile.ffmpeg -t netv-ffmpeg:local .
+  docker build --build-arg FFMPEG_IMAGE=netv-ffmpeg:local -t netv:local .
+  ```
+  Then update your `docker-compose.yml` to use `netv:local` instead of the ghcr image.
+  </details>
+- **No GPU / VPS**: If `/dev/dri` doesn't exist, comment out the `devices` section
+  in `docker-compose.yml` or compose will fail to start
 
 ### What are the keyboard shortcuts?
 
