@@ -79,6 +79,7 @@ jobs:
           build-args: |
             BUILD_DATE=${{ steps.date.outputs.datetime }}
             FFMPEG_VERSION=${{ steps.version.outputs.version }}
+            ENABLE_TENSORRT=0
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
 
