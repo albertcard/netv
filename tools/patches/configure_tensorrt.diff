@@ -1,0 +1,37 @@
+--- a/configure
++++ b/configure
+@@ -288,6 +288,7 @@ External library support:
+   --enable-libtesseract    enable Tesseract, needed for ocr filter [no]
+   --enable-libtheora       enable Theora encoding via libtheora [no]
+   --enable-libtorch        enable Torch as one DNN backend [no]
++  --enable-libtensorrt     enable TensorRT as one DNN backend [no]
+   --enable-libtwolame      enable MP2 encoding via libtwolame [no]
+   --enable-libuavs3d       enable AVS3 decoding via libuavs3d [no]
+   --enable-libv4l2         enable libv4l2/v4l-utils [no]
+@@ -2057,6 +2058,7 @@ EXTERNAL_LIBRARY_LIST="
+     libtesseract
+     libtheora
+     libtorch
++    libtensorrt
+     libtwolame
+     libuavs3d
+     libv4l2
+@@ -2978,7 +2980,7 @@ delogo_filter_deps="gpl"
+ derain_filter_select="dnn"
+ deshake_filter_select="pixelutils"
+ deshake_cuda_filter_deps="cuda_nvcc cuda"
+-dnn_deps_any="libtensorflow libopenvino libtorch"
++dnn_deps_any="libtensorflow libopenvino libtorch libtensorrt"
+ drawtext_filter_deps="libfreetype"
+ drawtext_filter_suggest="libfontconfig libfribidi libharfbuzz"
+ elbg_filter_deps="avcodec"
+@@ -7320,6 +7322,9 @@ enabled librubberband     && require_pkg_config librubberband "rubberband >= 1.8
+ enabled libshaderc        && require_pkg_config spirv_compiler "shaderc >= 2019.1" shaderc/shaderc.h shaderc_compiler_initialize
+ enabled libshine          && require_pkg_config libshine shine shine/layer3.h shine_encode_buffer
+ enabled libtorch          && check_cxxflags -std=c++17 && require_cxx libtorch torch/torch.h "torch::Tensor" -ltorch -lc10 -ltorch_cpu -lstdc++ -lpthread
++enabled libtensorrt       && check_cxxflags -std=c++17 && require_cxx libtensorrt NvInfer.h "nvinfer1::createInferRuntime" \
++                             -lnvinfer -lcudart -lstdc++ &&
++                             add_extralibs -lnvinfer_plugin
+ enabled libtwolame        && require libtwolame twolame.h twolame_init -ltwolame &&
+                              { check_lib libtwolame twolame.h twolame_encode_buffer_float32_interleaved -ltwolame ||
+                                die "ERROR: libtwolame must be installed and version must be >= 0.3.10"; }

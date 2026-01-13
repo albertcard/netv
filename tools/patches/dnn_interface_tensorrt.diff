@@ -1,0 +1,33 @@
+--- a/libavfilter/dnn_interface.h
++++ b/libavfilter/dnn_interface.h
+@@ -35,7 +35,8 @@ typedef enum {
+     DNN_TF = 1,
+     DNN_OV = 1 << 1,
+-    DNN_TH = 1 << 2
++    DNN_TH = 1 << 2,
++    DNN_TRT = 1 << 3
+ } DNNBackendType;
+
+ typedef enum {DNN_FLOAT = 1, DNN_UINT8 = 4} DNNDataType;
+@@ -136,6 +137,11 @@ typedef struct THOptions {
+     int optimize;
+ } THOptions;
+
++typedef struct TRTOptions {
++    const AVClass *clazz;
++    int device_id;
++} TRTOptions;
++
+ typedef struct DNNModule DNNModule;
+
+ typedef struct DnnContext {
+@@ -168,6 +174,9 @@ typedef struct DnnContext {
+ #if CONFIG_LIBTORCH
+     THOptions torch_option;
+ #endif
++#if CONFIG_LIBTENSORRT
++    TRTOptions trt_option;
++#endif
+ } DnnContext;
+
+ // Stores pointers to functions for loading, executing, freeing DNN models for one of the backends.

@@ -1,0 +1,9 @@
+--- a/libavfilter/dnn/Makefile
++++ b/libavfilter/dnn/Makefile
+@@ -7,6 +7,7 @@ DNN-OBJS-$(CONFIG_DNN)                     += dnn/dnn_io_proc.o
+ DNN-OBJS-$(CONFIG_LIBTENSORFLOW)           += dnn/dnn_backend_tf.o
+ DNN-OBJS-$(CONFIG_LIBOPENVINO)             += dnn/dnn_backend_openvino.o
+ DNN-OBJS-$(CONFIG_LIBTORCH)                += dnn/dnn_backend_torch.o
++DNN-OBJS-$(CONFIG_LIBTENSORRT)             += dnn/dnn_backend_tensorrt.o
+
+ OBJS-$(CONFIG_DNN)                         += $(DNN-OBJS-yes)

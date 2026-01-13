@@ -1,0 +1,20 @@
+--- a/libavfilter/dnn/dnn_interface.c
++++ b/libavfilter/dnn/dnn_interface.c
+@@ -33,6 +33,7 @@
+ extern const DNNModule ff_dnn_backend_openvino;
+ extern const DNNModule ff_dnn_backend_tf;
+ extern const DNNModule ff_dnn_backend_torch;
++extern const DNNModule ff_dnn_backend_tensorrt;
+
+ #define OFFSET(x) offsetof(DnnContext, x)
+ #define FLAGS AV_OPT_FLAG_FILTERING_PARAM
+@@ -78,6 +79,9 @@ static const DnnBackendInfo dnn_backend_info_list[] = {
+ #if CONFIG_LIBTORCH
+         {offsetof(DnnContext, torch_option), .module = &ff_dnn_backend_torch},
+ #endif
++#if CONFIG_LIBTENSORRT
++        {offsetof(DnnContext, trt_option), .module = &ff_dnn_backend_tensorrt},
++#endif
+ };
+
+ const DNNModule *ff_get_dnn_module(DNNBackendType backend_type, void *log_ctx)

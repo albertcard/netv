@@ -136,22 +136,23 @@ set -e
 # Hardware acceleration (set to 1 to enable)
 ENABLE_NVIDIA_CUDA=${ENABLE_NVIDIA_CUDA:-1}  # NVENC/NVDEC hardware encoding/decoding
 ENABLE_AMD_AMF=${ENABLE_AMD_AMF:-1}          # AMD AMF hardware encoding (requires AMD GPU)
-ENABLE_LIBTORCH=${ENABLE_LIBTORCH:-1}              # LibTorch DNN backend for AI filters
+ENABLE_LIBTORCH=${ENABLE_LIBTORCH:-0}        # LibTorch DNN backend for AI filters (default off, prefer TensorRT)
+ENABLE_TENSORRT=${ENABLE_TENSORRT:-1}        # TensorRT DNN backend for AI filters (fastest)
 
 # LibTorch CUDA variant (only used if ENABLE_LIBTORCH=1)
 # LIBTORCH_VARIANT options:
-#   "cu124"   - (default) CUDA 12.4 - required for FFmpeg compatibility (initXPU API)
-#               Note: cu124 binaries work on CUDA 12.4+ runtimes (forward compatible)
+#   "cu126"   - (default) CUDA 12.6 - compatible with LibTorch 2.7+
+#               Note: cu126 binaries work on CUDA 12.6+ runtimes (forward compatible)
 #   "auto"    - auto-detect from CUDA_VERSION, rounding minor to nearest even
 #               (PyTorch only releases cu126, cu128, cu130 - even minor versions)
 #               Examples: CUDA 12.9 -> cu128, CUDA 12.7 -> cu126, CUDA 13.x -> cu130
-#               WARNING: auto may select LibTorch 2.6.0+ which breaks FFmpeg (initXPU->init rename)
 #   "cpu"     - CPU-only (no GPU acceleration for DNN filters)
+#   "cu124"   - CUDA 12.4 (for older LibTorch 2.5.x)
 #   "cu126"   - force CUDA 12.6
 #   "cu128"   - force CUDA 12.8
 #   "cu130"   - force CUDA 13.0
 #   "rocm6.4" - AMD ROCm 6.4 (requires ROCm installed on host)
-LIBTORCH_VARIANT=${LIBTORCH_VARIANT:-cu124}
+LIBTORCH_VARIANT=${LIBTORCH_VARIANT:-cu126}
 
 # Optional build components (set to 0 to use apt package instead)
 BUILD_LIBPLACEBO=${BUILD_LIBPLACEBO:-1}  # GPU HDR tone mapping (requires Vulkan SDK)
@@ -254,6 +255,7 @@ APT_PACKAGES=(
 [ "$BUILD_LIBVA" != "1" ] && APT_PACKAGES+=(libva-dev)
 [ "$BUILD_LIBJXL" != "1" ] && APT_PACKAGES+=(libjxl-dev)
 [ "$BUILD_LIBX264" != "1" ] && APT_PACKAGES+=(libx264-dev)
+[ "$ENABLE_TENSORRT" = "1" ] && APT_PACKAGES+=(libnvinfer-dev libnvinfer-headers-dev libnvinfer-plugin-dev)
 if [ "$SKIP_DEPS" != "1" ]; then
     sudo apt-get update && sudo apt-get install -y "${APT_PACKAGES[@]}"
 fi
@@ -655,7 +657,7 @@ fi
 #       Use 2.7.0+ for RTX 50-series (Blackwell/SM 12.0) support.
 LIBTORCH_FLAGS=()
 if [ "$ENABLE_LIBTORCH" = "1" ]; then
-    LIBTORCH_VERSION=${LIBTORCH_VERSION:-2.5.0}
+    LIBTORCH_VERSION=${LIBTORCH_VERSION:-2.7.0}
     LIBTORCH_DIR="$SRC_DIR/libtorch"
 
     # Determine LibTorch CUDA variant
@@ -839,6 +841,87 @@ if [ "$ENABLE_LIBTORCH" = "1" ]; then
     fi
 fi
 
+# TensorRT native backend (no libtorch dependency)
+# Loads pre-compiled .engine files directly for maximum performance
+TENSORRT_FLAGS=()
+if [ "$ENABLE_TENSORRT" = "1" ]; then
+    echo "Patching FFmpeg for native TensorRT DNN backend..."
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    PATCH_DIR="$SCRIPT_DIR/patches"
+
+    # Copy TensorRT backend source file
+    if [ -f "$PATCH_DIR/dnn_backend_tensorrt.cpp" ]; then
+        cp "$PATCH_DIR/dnn_backend_tensorrt.cpp" "$FFMPEG_DIR/libavfilter/dnn/"
+        echo "Copied dnn_backend_tensorrt.cpp"
+    else
+        echo "WARNING: dnn_backend_tensorrt.cpp not found in $PATCH_DIR"
+    fi
+
+    # Patch dnn_interface.h to add DNN_TRT enum and TRTOptions
+    DNN_INTERFACE_H="$FFMPEG_DIR/libavfilter/dnn_interface.h"
+    if [ -f "$DNN_INTERFACE_H" ] && ! grep -q "DNN_TRT" "$DNN_INTERFACE_H"; then
+        # Add DNN_TRT to enum
+        sed -i 's/DNN_TH = 1 << 2$/DNN_TH = 1 << 2,\n    DNN_TRT = 1 << 3/' "$DNN_INTERFACE_H"
+        # Add TRTOptions struct after THOptions
+        sed -i '/^} THOptions;$/a\
+\
+typedef struct TRTOptions {\
+    const AVClass *clazz;\
+    int device_id;\
+} TRTOptions;' "$DNN_INTERFACE_H"
+        # Add trt_option to DnnContext (after torch_option)
+        sed -i '/#if CONFIG_LIBTORCH/,/#endif/{
+            /#endif/a\
+#if CONFIG_LIBTENSORRT\
+    TRTOptions trt_option;\
+#endif
+        }' "$DNN_INTERFACE_H"
+        echo "Patched dnn_interface.h"
+    fi
+
+    # Patch dnn_interface.c to register TensorRT backend
+    DNN_INTERFACE_C="$FFMPEG_DIR/libavfilter/dnn/dnn_interface.c"
+    if [ -f "$DNN_INTERFACE_C" ] && ! grep -q "ff_dnn_backend_tensorrt" "$DNN_INTERFACE_C"; then
+        # Add extern declaration
+        sed -i '/extern const DNNModule ff_dnn_backend_torch;/a extern const DNNModule ff_dnn_backend_tensorrt;' "$DNN_INTERFACE_C"
+        # Add to backend list
+        sed -i '/#if CONFIG_LIBTORCH/,/#endif/{
+            /#endif/a\
+#if CONFIG_LIBTENSORRT\
+        {offsetof(DnnContext, trt_option), .module = \&ff_dnn_backend_tensorrt},\
+#endif
+        }' "$DNN_INTERFACE_C"
+        echo "Patched dnn_interface.c"
+    fi
+
+    # Patch dnn/Makefile to add TensorRT object
+    DNN_MAKEFILE="$FFMPEG_DIR/libavfilter/dnn/Makefile"
+    if [ -f "$DNN_MAKEFILE" ] && ! grep -q "CONFIG_LIBTENSORRT" "$DNN_MAKEFILE"; then
+        sed -i '/CONFIG_LIBTORCH.*dnn_backend_torch/a DNN-OBJS-$(CONFIG_LIBTENSORRT)             += dnn/dnn_backend_tensorrt.o' "$DNN_MAKEFILE"
+        echo "Patched dnn/Makefile"
+    fi
+
+    # Patch configure to add --enable-libtensorrt option
+    CONFIGURE="$FFMPEG_DIR/configure"
+    if [ -f "$CONFIGURE" ] && ! grep -q "enable-libtensorrt" "$CONFIGURE"; then
+        # Add help text
+        sed -i '/--enable-libtorch.*enable Torch/a\  --enable-libtensorrt     enable TensorRT as one DNN backend [no]' "$CONFIGURE"
+        # Add to library list
+        sed -i '/^    libtorch$/a\    libtensorrt' "$CONFIGURE"
+        # Add to dnn_deps_any
+        sed -i 's/dnn_deps_any="libtensorflow libopenvino libtorch"/dnn_deps_any="libtensorflow libopenvino libtorch libtensorrt"/' "$CONFIGURE"
+        # Add library check (after libtorch check)
+        sed -i '/enabled libtorch.*require_cxx libtorch/a\
+enabled libtensorrt       \&\& check_cxxflags -std=c++17 \&\& require_cxx libtensorrt NvInfer.h "nvinfer1::createInferRuntime" \\\
+                             -lnvinfer -lcudart -lstdc++ \&\&\
+                             add_extralibs -lnvinfer_plugin' "$CONFIGURE"
+        echo "Patched configure"
+    fi
+
+    TENSORRT_FLAGS=(--enable-libtensorrt)
+    echo "TensorRT DNN backend patches applied"
+fi
+
 cd "$FFMPEG_DIR" && \
 # Build configure flags
 # MARCH=native for CPU-specific optimizations (opt-in, not portable)
@@ -908,6 +991,7 @@ CONFIGURE_CMD=(
     "${CUDA_FLAGS[@]}"
     "${AMF_FLAGS[@]}"
     "${LIBTORCH_FLAGS[@]}"
+    "${TENSORRT_FLAGS[@]}"
 )
 
 if [ "$BUILD_LIBPLACEBO" = "1" ]; then

@@ -1,5 +1,18 @@
 # Super-Resolution with FFmpeg + LibTorch/TensorRT
 
+## Permissions
+
+**Allowed modifications:**
+- This branch (`feature/superres`) — do NOT push
+- `~/ffmpeg_sources/`
+- `~/ffmpeg_build/`
+- `~/.local/bin/` and `~/.local/lib/`
+
+**Requires explicit permission:**
+- All other files/directories
+
+---
+
 ## Overview
 
 Goal: Real-time 4x super-resolution (720p → 4K) using Real-ESRGAN through FFmpeg's DNN processing filter with GPU acceleration.
@@ -12,20 +25,69 @@ Goal: Real-time 4x super-resolution (720p → 4K) using Real-ESRGAN through FFmp
 - **FFmpeg source:** `~/ffmpeg_sources/ffmpeg-snapshot`
 - **Models:** `~/ffmpeg_build/models/`
 
-## Current Status
+## Current Status (January 2026)
 
-**Problem:** ~4x slowdown between pure PyTorch (95 fps) and FFmpeg+libtorch (22 fps) for the same model.
+**SOLVED:** Zero-copy CUDA frames now working. FFmpeg achieves near-pure-PyTorch performance!
 
-**Key finding:** Must specify `device=cuda` in dnn_processing filter. Without it, model runs on CPU (2 fps).
+### Benchmark Results (RTX 5090, realesr-general-x4v3)
 
-**Open question:** What causes the remaining 4x gap? Likely candidates:
-- JIT recompilation per frame
-- CUDA context switching (FFmpeg vs PyTorch contexts)
-- Synchronous execution / excessive cudaDeviceSynchronize
-- Per-frame memory allocation
-- FFmpeg filter framework overhead
+| Backend | 720p→4K | 360p→1440p | Real-time? |
+|---------|---------|------------|------------|
+| **TensorRT** | | | |
+| Pure Python TensorRT | 66 fps | N/A | ✅ Yes |
+| FFmpeg + TensorRT | **57 fps** | N/A* | ✅ Yes |
+| **PyTorch JIT** | | | |
+| Pure Python JIT | 12.9 fps | 79 fps | ❌ No |
+| Pure Python + torch.compile() | 12.8 fps | N/A | ❌ No |
+| FFmpeg + PyTorch JIT | 12 fps | 70 fps | ❌ No |
+| FFmpeg (old, CPU copies) | 3.3 fps | N/A | ❌ No |
 
-**NOT the bottleneck:** Color conversion (NV12↔RGB). This is ~1ms either way.
+*TRT model compiled for 720p fixed input size
+
+### Key Findings
+
+1. **TensorRT is the only viable option** for real-time 4x upscaling at 720p
+2. **torch.compile() provides NO speedup** - model already optimized by TorchScript
+3. **Zero-copy CUDA frames work** - FFmpeg achieves 93% of pure Python performance
+4. **TensorRT is 4.75x faster** than PyTorch JIT (57 vs 12 fps)
+
+### Why torch.compile() doesn't help
+
+Tested all torch.compile() modes (default, reduce-overhead, max-autotune, inductor):
+- All achieved ~12.8 fps, same as JIT baseline
+- Model is already TorchScript-traced, leaving little room for Dynamo to optimize
+- Operations (Conv2d, LeakyReLU, PixelShuffle) already use cuDNN
+- Model is memory-bandwidth bound, not compute bound
+
+### Key Fixes Applied
+
+1. **Added CUDA zero-copy input path** - torch backend now creates tensors directly from CUDA memory
+2. **Added CUDA zero-copy output path** - results written directly to CUDA frames
+3. **Added 4-channel format support** - handles rgb0/bgr0/rgba/bgra (hwupload_cuda produces rgb0)
+4. **Added sync execution path** - upstream had no fallback when async=false
+5. **Added FF_FILTER_FLAG_HWFRAME_AWARE** - required for filters that output hw_frames_ctx
+
+### Working Usage
+
+```bash
+# Zero-copy pipeline (achieves near-PyTorch performance)
+CUDA_VISIBLE_DEVICES=0 LD_PRELOAD=$HOME/.local/lib/libtorch_cuda.so \
+ffmpeg -i input.mp4 \
+  -vf "format=rgb24,hwupload_cuda,dnn_processing=dnn_backend=torch:model=$HOME/ffmpeg_build/models/realesr-general-x4v3.pt:device=cuda,hwdownload,format=rgb0" \
+  -c:v libx264 output.mp4
+```
+
+### Modified Files
+
+Patches saved to `tools/patches/`:
+- `dnn_backend_torch.cpp` - Full working torch backend with CUDA zero-copy
+- `vf_dnn_processing.c` - DNN processing filter with CUDA frame support
+
+### Next Steps for 60+ fps at 720p
+
+1. **TensorRT** - Can be 2-3x faster than PyTorch JIT
+2. **FP16 inference** - Halves memory bandwidth, ~2x speedup
+3. **Model pruning** - Smaller models for specific use cases
 
 ## Models
 
@@ -195,48 +257,12 @@ ffmpeg -hwaccel cuda -hwaccel_output_format cuda -i input.mp4 \
 
 ## TensorRT Acceleration
 
-Two approaches are available:
+TensorRT provides significant speedup but requires:
+- SM 7.0+ GPU (Volta, Turing, Ampere, Ada, Blackwell)
+- torch-tensorrt package
+- TensorRT runtime libraries
 
-### Option A: Native TensorRT Backend (Recommended)
-
-The fastest approach - FFmpeg loads TensorRT engines directly, no libtorch dependency.
-
-**Build FFmpeg with TensorRT:**
-```bash
-ENABLE_TENSORRT=1 ENABLE_LIBTORCH=0 ./tools/install-ffmpeg.sh
-```
-
-**Export model to TensorRT engine:**
-```bash
-# Export for 720p input (creates model_1280x720_fp16.engine)
-python tools/export-tensorrt.py --width 1280 --height 720 --fp16
-
-# Export for 1080p input
-python tools/export-tensorrt.py --width 1920 --height 1080 --fp16
-```
-
-**Run with FFmpeg:**
-```bash
-ffmpeg -i input_720p.mp4 \
-  -vf "dnn_processing=dnn_backend=tensorrt:model=model_1280x720_fp16.engine" \
-  -c:v hevc_nvenc output.mp4
-```
-
-**Note:** TensorRT engines are compiled for fixed input dimensions. You need separate
-engines for different resolutions (720p, 1080p, etc.). Use `scale=W:H` before
-dnn_processing to match the engine's expected input.
-
-### Option B: LibTorch + torch_tensorrt
-
-Alternative approach using libtorch with TensorRT-compiled TorchScript models.
-Requires larger dependencies but supports dynamic shapes.
-
-**Build FFmpeg with LibTorch:**
-```bash
-ENABLE_TENSORRT=0 ENABLE_LIBTORCH=1 ./tools/install-ffmpeg.sh
-```
-
-**Compile model with torch_tensorrt:**
+### Compile model with TensorRT
 
 ```bash
 ./tools/compile-sr-tensorrt.sh
@@ -244,7 +270,7 @@ ENABLE_TENSORRT=0 ENABLE_LIBTORCH=1 ./tools/install-ffmpeg.sh
 
 Creates `realesr-general-x4v3-trt.pt` optimized for FP16 inference.
 
-**Run TensorRT model with FFmpeg:**
+### Run TensorRT model with FFmpeg
 
 ```bash
 TRT_LIB=~/ffmpeg_build/models/.venv/lib/python3.12/site-packages/torch_tensorrt/lib
@@ -256,14 +282,6 @@ ffmpeg -i input.mp4 \
   -vf "dnn_processing=dnn_backend=torch:model=$HOME/ffmpeg_build/models/realesr-general-x4v3-trt.pt:device=cuda" \
   output.mp4
 ```
-
-### Performance Comparison
-
-| Backend | 720p→4K | Dependencies |
-|---------|---------|--------------|
-| Native TensorRT | ~65 fps | libnvinfer only |
-| LibTorch + torch_tensorrt | ~57 fps | libtorch + torch_tensorrt |
-| LibTorch JIT | ~12 fps | libtorch only |
 
 ## GPU Compatibility
 
