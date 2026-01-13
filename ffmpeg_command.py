@@ -148,13 +148,13 @@ def init(
     load_settings: Callable[[], dict[str, Any]],
     sr_engine_dir: str = "",
 ) -> None:
-    """Initialize module with settings loader and optional SR config."""
+    """Initialize module with settings loader and optional AI Upscale config."""
     global _load_settings, _sr_engine_dir
     _load_settings = load_settings
     _sr_engine_dir = sr_engine_dir
     _load_series_probe_cache()
     if _sr_engine_dir:
-        log.info("SR enabled: engine_dir=%s", _sr_engine_dir)
+        log.info("AI Upscale enabled: engine_dir=%s", _sr_engine_dir)
 
 
 def get_settings() -> dict[str, Any]:
@@ -169,7 +169,7 @@ def get_ffmpeg_env() -> dict[str, str] | None:
 
 
 def _build_sr_filter(sr_mode: str, source_height: int, target_height: int) -> str:
-    """Build SR filter string if needed. Returns empty string if no SR."""
+    """Build AI Upscale filter string if needed. Returns empty string if disabled."""
     if not _sr_engine_dir or sr_mode == "off":
         return ""
 

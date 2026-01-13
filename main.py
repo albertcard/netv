@@ -127,7 +127,7 @@ SR_ENGINE_DIR = pathlib.Path(
 
 
 def is_sr_available() -> bool:
-    """Check if super-resolution is available (at least one TensorRT engine exists)."""
+    """Check if AI Upscale is available (at least one TensorRT engine exists)."""
     if not SR_ENGINE_DIR.exists():
         return False
     return any(SR_ENGINE_DIR.glob("realesrgan_*p_fp16.engine"))

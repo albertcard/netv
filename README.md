@@ -37,6 +37,7 @@ through their IPTV providers.
 
 - **Live TV** with EPG grid guide
 - **Movies & Series** with metadata, seasons, episodes
+- **AI Upscale** - Real-time 4x upscaling via TensorRT (720p → 4K @ 85fps)
 - **Chromecast** support (HTTPS required)
 - **Closed captions** with style customization
 - **Search** across all content (supports regex)
@@ -165,6 +166,25 @@ docker compose up -d
 
 Open http://localhost:8000. To update: `docker compose pull && docker compose up -d`
 
+#### AI Upscale Image (NVIDIA GPU)
+
+For real-time 4x AI upscaling (720p → 4K at 85fps on RTX 5090):
+
+```bash
+git clone https://github.com/jvdillon/netv.git
+cd netv
+docker build -f Dockerfile.ai_upscale -t netv-ai .
+docker run --gpus all -v netv-models:/models -v ./cache:/app/cache -p 8000:8000 netv-ai
+```
+
+First start builds TensorRT engines for your GPU (~2-3 min). Engines are cached in the
+`netv-models` volume for instant subsequent starts.
+
+Requirements:
+- NVIDIA GPU (RTX 20xx or newer recommended)
+- [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
+- Driver 535+ (CUDA 12.x)
+
 #### Build from Source
 
 For customization or development:
@@ -209,8 +229,12 @@ For peak FFMPEG performance, Chromecast (requires HTTPS), and auto-start:
 # 3. (Optional) Build FFmpeg (required for optimal NVidia encoding efficiency)
 ./tools/install-ffmpeg.sh
 
-# 4. Install systemd service
-sudo ./tools/install-netv.sh # default port=8000 or --port 9000 
+# 4. (Optional) Build AI Upscale engines (requires NVIDIA GPU + TensorRT)
+uv sync --group ai_upscale
+./tools/install-ai_upscale.sh
+
+# 5. Install systemd service
+sudo ./tools/install-netv.sh # default port=8000 or --port 9000
 ```
 
 Manage with:
