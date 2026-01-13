@@ -1,20 +1,21 @@
 #!/usr/bin/env python3
 """Export PyTorch models to TensorRT engines for FFmpeg dnn_processing filter.
 
-This script converts Real-ESRGAN and similar super-resolution models to TensorRT
-engines (.engine files) that can be loaded by FFmpeg's TensorRT DNN backend.
+This script converts Real-ESRGAN models to TensorRT engines (.engine files)
+that can be loaded by FFmpeg's TensorRT DNN backend.
 
-Supports dynamic input shapes - a single engine handles a range of resolutions.
+Default model: realesr-general-x4v3 (SRVGGNetCompact) - fast, good quality
+Alternative: RealESRGAN_x4plus (RRDBNet) - slow, best quality
 
 Usage:
-    # Export with dynamic shapes (default: 270p to 1280p)
+    # Export default compact model (recommended)
     python export-tensorrt.py --output model.engine
 
     # Export with custom height range
     python export-tensorrt.py --min-height 360 --max-height 1080
 
-    # Export from custom model
-    python export-tensorrt.py --model /path/to/model.pth
+    # Export high-quality model (slower)
+    python export-tensorrt.py --model-type rrdbnet --output hq.engine
 
 Requirements:
     pip install torch onnx tensorrt
@@ -27,10 +28,34 @@ import argparse
 import os
 import sys
 import tempfile
+import urllib.request
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
+
+class SRVGGNetCompact(nn.Module):
+    """Compact SR network - fast inference, good quality."""
+    def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=32, upscale=4):
+        super().__init__()
+        self.upscale = upscale
+        self.body = nn.ModuleList()
+        self.body.append(nn.Conv2d(num_in_ch, num_feat, 3, 1, 1))
+        self.body.append(nn.PReLU(num_parameters=num_feat))
+        for _ in range(num_conv - 2):
+            self.body.append(nn.Conv2d(num_feat, num_feat, 3, 1, 1))
+            self.body.append(nn.PReLU(num_parameters=num_feat))
+        self.body.append(nn.Conv2d(num_feat, num_out_ch * upscale * upscale, 3, 1, 1))
+        self.upsampler = nn.PixelShuffle(upscale)
+
+    def forward(self, x):
+        out = x
+        for layer in self.body[:-1]:
+            out = layer(out)
+        out = self.body[-1](out)
+        out = self.upsampler(out)
+        return out + F.interpolate(x, scale_factor=self.upscale, mode='nearest')
 
 
 class ResidualDenseBlock(nn.Module):
@@ -69,14 +94,13 @@ class RRDB(nn.Module):
 
 
 class RRDBNet(nn.Module):
-    """RRDBNet architecture for Real-ESRGAN."""
+    """RRDBNet architecture for Real-ESRGAN - highest quality, slower."""
     def __init__(self, num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4):
         super().__init__()
         self.scale = scale
         self.conv_first = nn.Conv2d(num_in_ch, num_feat, 3, 1, 1)
         self.body = nn.Sequential(*[RRDB(num_feat, num_grow_ch) for _ in range(num_block)])
         self.conv_body = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
-        # Upsampling
         self.conv_up1 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
         self.conv_up2 = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
         self.conv_hr = nn.Conv2d(num_feat, num_feat, 3, 1, 1)
@@ -87,31 +111,48 @@ class RRDBNet(nn.Module):
         feat = self.conv_first(x)
         body_feat = self.conv_body(self.body(feat))
         feat = feat + body_feat
-        # Upsample 4x
         feat = self.lrelu(self.conv_up1(F.interpolate(feat, scale_factor=2, mode='nearest')))
         feat = self.lrelu(self.conv_up2(F.interpolate(feat, scale_factor=2, mode='nearest')))
         out = self.conv_last(self.lrelu(self.conv_hr(feat)))
         return out
 
 
-def get_model(model_path=None):
-    """Load or download Real-ESRGAN model."""
+# Model URLs
+MODELS = {
+    'compact': {
+        'url': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.2.5.0/realesr-general-x4v3.pth',
+        'filename': 'realesr-general-x4v3.pth',
+    },
+    'rrdbnet': {
+        'url': 'https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth',
+        'filename': 'RealESRGAN_x4plus.pth',
+    },
+}
+
+
+def download_model(model_type, cache_dir):
+    """Download model weights."""
+    info = MODELS[model_type]
+    path = os.path.join(cache_dir, info['filename'])
+    if os.path.exists(path):
+        print(f"Using cached model: {path}")
+        return path
+
+    print(f"Downloading {info['filename']}...")
+    urllib.request.urlretrieve(info['url'], path)
+    print(f"Downloaded to {path}")
+    return path
+
+
+def get_model(model_path=None, model_type='compact', cache_dir=None):
+    """Load Real-ESRGAN model."""
+    if cache_dir is None:
+        cache_dir = os.path.expanduser('~/.cache/realesrgan')
+    os.makedirs(cache_dir, exist_ok=True)
+
     if model_path is None:
-        # Download from HuggingFace
-        try:
-            from huggingface_hub import hf_hub_download
-        except ImportError:
-            print("Installing huggingface_hub...")
-            os.system(f"{sys.executable} -m pip install huggingface_hub")
-            from huggingface_hub import hf_hub_download
+        model_path = download_model(model_type, cache_dir)
 
-        model_path = hf_hub_download(
-            repo_id="ai-forever/Real-ESRGAN",
-            filename="RealESRGAN_x4.pth"
-        )
-        print(f"Downloaded model to {model_path}")
-
-    # Load weights
     print(f"Loading model from {model_path}")
     state_dict = torch.load(model_path, map_location='cpu', weights_only=True)
     if 'params_ema' in state_dict:
@@ -119,11 +160,20 @@ def get_model(model_path=None):
     elif 'params' in state_dict:
         state_dict = state_dict['params']
 
-    # Create model and load weights
-    model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+    # Auto-detect model type from state dict
+    num_conv_layers = sum(1 for k, v in state_dict.items() if 'weight' in k and len(v.shape) == 4)
+
+    if num_conv_layers > 50:  # RRDBNet has many more conv layers
+        model = RRDBNet(num_in_ch=3, num_out_ch=3, num_feat=64, num_block=23, num_grow_ch=32, scale=4)
+        model_name = "RRDBNet"
+    else:
+        model = SRVGGNetCompact(num_in_ch=3, num_out_ch=3, num_feat=64, num_conv=num_conv_layers, upscale=4)
+        model_name = "SRVGGNetCompact"
+
     model.load_state_dict(state_dict)
     model.eval()
-    print(f"Loaded RRDBNet model ({sum(p.numel() for p in model.parameters())/1e6:.1f}M params)")
+    params = sum(p.numel() for p in model.parameters()) / 1e6
+    print(f"Loaded {model_name} ({params:.2f}M params)")
     return model
 
 
@@ -135,13 +185,11 @@ def export_onnx(model, opt_shape, onnx_path):
 
     dummy_input = torch.randn(1, 3, opt_h, opt_w, device='cpu')
 
-    # Dynamic axes for height and width (dimensions 2 and 3)
     dynamic_axes = {
         'input': {2: 'height', 3: 'width'},
         'output': {2: 'out_height', 3: 'out_width'}
     }
 
-    # Use legacy exporter to embed weights in ONNX file (dynamo exports to separate .data file)
     torch.onnx.export(
         model,
         (dummy_input,),
@@ -151,9 +199,8 @@ def export_onnx(model, opt_shape, onnx_path):
         opset_version=17,
         do_constant_folding=True,
         dynamic_axes=dynamic_axes,
-        dynamo=False,  # Use legacy exporter to embed weights
+        dynamo=False,
     )
-
     print(f"  ONNX export complete (dynamic H/W)")
 
 
@@ -178,21 +225,17 @@ def build_engine(onnx_path, engine_path, min_shape, opt_shape, max_shape, fp16=F
     network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
     parser = trt.OnnxParser(network, logger)
 
-    # Parse ONNX
     with open(onnx_path, 'rb') as f:
         if not parser.parse(f.read()):
             for i in range(parser.num_errors):
                 print(f"  ONNX parse error: {parser.get_error(i)}")
             raise RuntimeError("Failed to parse ONNX model")
 
-    # Configure builder
     config = builder.create_builder_config()
     config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, workspace_gb * (1 << 30))
 
-    # Create optimization profile for dynamic shapes
     profile = builder.create_optimization_profile()
     input_name = network.get_input(0).name
-    # Shape format: (batch, channels, height, width)
     profile.set_shape(input_name,
                       min=(1, 3, min_h, min_w),
                       opt=(1, 3, opt_h, opt_w),
@@ -206,13 +249,11 @@ def build_engine(onnx_path, engine_path, min_shape, opt_shape, max_shape, fp16=F
         else:
             print("  Warning: FP16 not supported on this platform")
 
-    # Build engine
     print("  Building engine (this may take several minutes)...")
     serialized_engine = builder.build_serialized_network(network, config)
     if serialized_engine is None:
         raise RuntimeError("Failed to build TensorRT engine")
 
-    # Save engine
     with open(engine_path, 'wb') as f:
         f.write(serialized_engine)
 
@@ -222,41 +263,39 @@ def build_engine(onnx_path, engine_path, min_shape, opt_shape, max_shape, fp16=F
 def height_to_shape(h, aspect=16/9):
     """Convert height to (width, height) assuming aspect ratio."""
     w = int(h * aspect)
-    # Round width to multiple of 8 for GPU alignment
     w = (w + 7) // 8 * 8
     return (w, h)
 
 
 def main():
-    parser = argparse.ArgumentParser(description='Export PyTorch models to TensorRT engines')
+    parser = argparse.ArgumentParser(description='Export Real-ESRGAN to TensorRT')
     parser.add_argument('--model', '-m', type=str, default=None,
-                        help='Path to PyTorch model (.pth or .pt). Downloads Real-ESRGAN if not specified.')
+                        help='Path to PyTorch model (.pth). Downloads default if not specified.')
+    parser.add_argument('--model-type', type=str, default='compact', choices=['compact', 'rrdbnet'],
+                        help='Model type: compact (fast, default) or rrdbnet (slow, highest quality)')
     parser.add_argument('--min-height', type=int, default=270,
                         help='Minimum input height (default: 270)')
     parser.add_argument('--opt-height', type=int, default=720,
                         help='Optimal input height (default: 720)')
-    parser.add_argument('--max-height', type=int, default=1280,
-                        help='Maximum input height (default: 1280)')
+    parser.add_argument('--max-height', type=int, default=1080,
+                        help='Maximum input height (default: 1080)')
     parser.add_argument('--output', '-o', type=str, default=None,
-                        help='Output engine path. Default: realesrgan_dynamic_fp16.engine')
+                        help='Output engine path')
     parser.add_argument('--fp16', action='store_true', default=True,
                         help='Enable FP16 precision (default: enabled)')
     parser.add_argument('--fp32', action='store_true',
                         help='Use FP32 precision instead of FP16')
-    parser.add_argument('--workspace', type=int, default=4,
-                        help='TensorRT workspace size in GB (default: 4)')
+    parser.add_argument('--workspace', type=int, default=8,
+                        help='TensorRT workspace size in GB (default: 8)')
     parser.add_argument('--keep-onnx', action='store_true',
                         help='Keep intermediate ONNX file')
     parser.add_argument('--onnx-only', action='store_true',
-                        help='Only export ONNX, skip TensorRT engine build (for when GPU is busy)')
+                        help='Only export ONNX, skip TensorRT engine build')
     args = parser.parse_args()
 
-    # Handle fp32 flag
     if args.fp32:
         args.fp16 = False
 
-    # Convert heights to (width, height) shapes assuming 16:9
-    # Ensure min <= opt <= max
     min_h = min(args.min_height, args.max_height)
     max_h = args.max_height
     opt_h = min(max(args.opt_height, min_h), max_h)
@@ -264,18 +303,15 @@ def main():
     opt_shape = height_to_shape(opt_h)
     max_shape = height_to_shape(max_h)
 
-    # Set output path
     if args.output is None:
         suffix = '_fp16' if args.fp16 else '_fp32'
-        args.output = f"realesrgan_dynamic{suffix}.engine"
+        args.output = f"realesrgan_{args.model_type}{suffix}.engine"
 
-    # Load model
     print("=" * 60)
-    print("Real-ESRGAN to TensorRT Export (Dynamic Shapes)")
+    print("Real-ESRGAN to TensorRT Export")
     print("=" * 60)
-    model = get_model(args.model)
+    model = get_model(args.model, args.model_type)
 
-    # Export to ONNX
     if args.keep_onnx:
         onnx_path = args.output.replace('.engine', '.onnx')
     else:
@@ -291,7 +327,6 @@ def main():
             print(f"  trtexec --onnx={onnx_path} --saveEngine={args.output} --fp16")
             return
 
-        # Build TensorRT engine
         build_engine(onnx_path, args.output,
                      min_shape=min_shape,
                      opt_shape=opt_shape,

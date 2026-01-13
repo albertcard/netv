@@ -29,25 +29,29 @@ Goal: Real-time 4x super-resolution (720p → 4K) using Real-ESRGAN through FFmp
 
 ## Models
 
-| Model | Architecture | Size | Scale | Speed | Quality |
-|-------|--------------|------|-------|-------|---------|
-| `realesr-general-x4v3.pt` | SRVGGNetCompact | 5MB | 4x | Fast | Good |
-| `RealESRGAN_x4plus.pt` | RRDBNet (23 blocks) | 67MB | 4x | Slow | Best |
-| `RealESRGAN_x2plus.pt` | RRDBNet (23 blocks) | 67MB | 2x | Slow | Best |
+| Model | Architecture | Params | Scale | FPS (720p) | Quality |
+|-------|--------------|--------|-------|------------|---------|
+| **`realesr-general-x4v3`** | SRVGGNetCompact | **1.2M** | 4x | **63** | Good |
+| `RealESRGAN_x4plus` | RRDBNet (23 blocks) | 16.7M | 4x | 3.6 | Best |
+| `RealESRGAN_x2plus` | RRDBNet (23 blocks) | 16.7M | 2x | ~7 | Best |
 
-Models stored in: `~/ffmpeg_build/models/`
+**Default:** `realesr-general-x4v3` (compact model) - recommended for real-time video.
+
+Models downloaded from: https://github.com/xinntao/Real-ESRGAN/releases
 
 ### Architecture Comparison
 
-**SRVGGNetCompact** (realesr-general-x4v3)
-- Lightweight network designed for real-time video
-- ~13x fewer parameters than RRDBNet
-- Best speed/quality tradeoff for video
+**SRVGGNetCompact** (realesr-general-x4v3) - **DEFAULT**
+- Lightweight network: 1.2M params (14x smaller than RRDBNet)
+- 63 fps @ 720p→4K (2.1x realtime)
+- Uses PReLU activations and PixelShuffle upsampling
+- Best speed/quality tradeoff for real-time video
 
 **RRDBNet** (x4plus, x2plus)
-- Full Real-ESRGAN architecture with residual-in-residual dense blocks
-- Higher quality but much slower
-- Better for single images or offline processing
+- Full Real-ESRGAN architecture: 16.7M params
+- 3.6 fps @ 720p→4K (0.12x realtime)
+- 23 Residual-in-Residual Dense Blocks
+- Highest quality, but too slow for real-time
 
 ## Scripts
 
@@ -61,29 +65,34 @@ Models stored in: `~/ffmpeg_build/models/`
 
 Main installation script that:
 1. Creates a Python venv in `~/ffmpeg_build/models/.venv`
-2. Installs torch, huggingface_hub, onnx, tensorrt
-3. Downloads Real-ESRGAN from HuggingFace
-4. Builds TensorRT engine with dynamic shapes (270p to 1280p)
-5. Outputs `~/ffmpeg_build/models/realesrgan_dynamic_fp16.engine`
+2. Installs torch, onnx, tensorrt (version matched to system)
+3. Downloads realesr-general-x4v3 (compact model) from GitHub
+4. Builds fixed-shape TensorRT engines for 480p, 720p, 1080p
+5. Outputs `~/ffmpeg_build/models/realesrgan_{480,720,1080}p_fp16.engine`
+
+**Note:** FFmpeg's TensorRT backend requires fixed input dimensions. Use `scale=W:H`
+before dnn_processing to match the engine's expected input size.
 
 ### export-tensorrt.py
 
 Flexible export script with options:
 ```bash
-# Default: dynamic shapes for 270p-1280p, FP16
-python tools/export-tensorrt.py --output model.engine
+# Default: compact model, fixed 720p
+python tools/export-tensorrt.py -o model.engine
 
-# Custom height range
-python tools/export-tensorrt.py --min-height 360 --max-height 1080
+# Fixed shape for specific resolution
+python tools/export-tensorrt.py --min-height 1080 --opt-height 1080 --max-height 1080 -o 1080p.engine
+
+# High-quality model (slower)
+python tools/export-tensorrt.py --model-type rrdbnet -o hq.engine
 
 # From custom model file
-python tools/export-tensorrt.py --model /path/to/model.pth
-
-# ONNX only (skip TensorRT build)
-python tools/export-tensorrt.py --onnx-only --keep-onnx
+python tools/export-tensorrt.py --model /path/to/model.pth -o custom.engine
 ```
 
-Dynamic shape support: A single engine handles inputs from min to max resolution.
+**Model types:**
+- `compact` (default): realesr-general-x4v3 - 63 fps, good quality
+- `rrdbnet`: RealESRGAN_x4plus - 3.6 fps, best quality
 
 ## FFmpeg Patches
 
@@ -119,19 +128,31 @@ Test configuration: **RealESRGAN_x4plus, 1280x720 input, 100 frames**
 | 4 | FFmpeg + libtorch | Current patches, PyTorch JIT |
 | 5 | FFmpeg + TensorRT | Patches + TRT-compiled model |
 
-### Benchmark results (RTX 5090, realesr-general-x4v3, 1280x720, 150 frames)
+### Benchmark results (RTX 5090, 1280x720 input, 90 frames)
+
+**Compact model (realesr-general-x4v3, 1.2M params) - RECOMMENDED:**
 
 | Scenario | FPS | Realtime | Notes |
 |----------|-----|----------|-------|
-| 1. Pure eager PyTorch | TBD | | |
-| 2. Pure torch.compile | TBD | | |
-| 3. Pure TensorRT (Python) | 66.1 | 2.20x | Direct inference, no ffmpeg |
-| 4. FFmpeg + libtorch | 3.6 | 0.12x | Baseline |
-| 5. FFmpeg + TensorRT | 4.6 | 0.15x | +28% but massive overhead |
+| Pure PyTorch FP16 | 26.7 | 0.89x | No optimization |
+| Pure TensorRT | 64.2 | 2.14x | torch_tensorrt |
+| **FFmpeg + TensorRT** | **63** | **2.1x** | Native backend, fixed shapes |
 
-### Why TensorRT is slow in FFmpeg
+**Large model (RealESRGAN_x4plus, 16.7M params) - highest quality:**
 
-Python achieves 66 FPS but ffmpeg only 4.6 FPS. The bottleneck is **memory operations, not model inference**.
+| Scenario | FPS | Realtime | Notes |
+|----------|-----|----------|-------|
+| Pure PyTorch FP16 | 1.7 | 0.06x | Compute-bound |
+| Pure TensorRT | 3.6 | 0.12x | torch_tensorrt |
+| FFmpeg + TensorRT | 3.6 | 0.12x | No FFmpeg overhead |
+
+**Key finding:** The compact model is 18x faster than the large model with good quality.
+FFmpeg adds essentially zero overhead - the bottleneck is model compute.
+
+### Why the large model is slow
+
+The RRDBNet architecture (23 RRDB blocks) is compute-bound at ~3.6 fps regardless of framework.
+FFmpeg adds no measurable overhead - pure TensorRT and FFmpeg+TensorRT achieve identical performance.
 
 ```
 ffmpeg -benchmark output:
@@ -250,8 +271,44 @@ ffmpeg -i input.mp4 \
   -c:v hevc_nvenc output.mp4
 ```
 
-**Note:** Dynamic shape engines handle a range of input resolutions without needing
-separate engines. The engine is optimized for the `--opt-height` (default 720p).
+**Note on dynamic shapes:** Dynamic shape engines may fail to build on some GPU/TensorRT
+combinations. If dynamic shapes fail, build fixed-dimension engines instead:
+
+```bash
+# Build 720p engine directly from ONNX using Python
+source ~/ffmpeg_build/models/.venv/bin/activate
+python3 << 'EOF'
+import tensorrt as trt
+import os
+
+onnx_path = os.path.expanduser("~/ffmpeg_build/models/realesrgan_dynamic_fp16.onnx")
+engine_path = os.path.expanduser("~/ffmpeg_build/models/realesrgan_720p_fp16.engine")
+
+logger = trt.Logger(trt.Logger.INFO)
+builder = trt.Builder(logger)
+network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
+parser = trt.OnnxParser(network, logger)
+
+with open(onnx_path, 'rb') as f:
+    parser.parse(f.read())
+
+config = builder.create_builder_config()
+config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, 8 * (1 << 30))
+
+profile = builder.create_optimization_profile()
+profile.set_shape(network.get_input(0).name,
+                  min=(1, 3, 720, 1280), opt=(1, 3, 720, 1280), max=(1, 3, 720, 1280))
+config.add_optimization_profile(profile)
+config.set_flag(trt.BuilderFlag.FP16)
+
+engine = builder.build_serialized_network(network, config)
+with open(engine_path, 'wb') as f:
+    f.write(engine)
+print(f"Saved: {engine_path}")
+EOF
+```
+
+Fixed-shape engines require `scale=1280:720` before dnn_processing to match input dimensions.
 
 ### Option B: LibTorch + torch_tensorrt
 
