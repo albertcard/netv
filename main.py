@@ -1519,11 +1519,11 @@ async def player_page(
     server_settings = load_server_settings()
     user_settings = load_user_settings(username)
     transcode_mode = server_settings.get("transcode_mode", "auto")
+    is_https = (
+        request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
+    )
     if transcode_mode == "auto":
         needs_transcode = info.is_m3u or ext in ("mkv", "mp4", "avi", "wmv", "flv")
-        is_https = (
-            request.url.scheme == "https" or request.headers.get("x-forwarded-proto") == "https"
-        )
         mixed_content = is_https and info.url.startswith("http://")
         if needs_transcode or mixed_content:
             transcode_mode = "always"
@@ -1565,6 +1565,7 @@ async def player_page(
             "deinterlace_fallback": info.deinterlace_fallback,
             "source_id": info.source_id,
             "content_access": _get_content_access(username),
+            "is_https": is_https,
         },
     )
 
