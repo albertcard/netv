@@ -389,87 +389,86 @@ Test: Simple 2x upscale model, 720p→1440p, on colossus (RTX 5090)
 
 **Note:** These were with a toy model, not RealESRGAN_x4plus. Need to redo with proper model.
 
-## What's in the patches vs what's in ffmpeg source
+## Patch Architecture
 
-**PATCHES ARE NOT UP TO DATE WITH FFMPEG SOURCE.**
+The `tools/patches/` directory contains complete source file replacements that `install-ffmpeg.sh` copies into the FFmpeg source tree.
 
-Full diffs saved to `tools/patches/`:
-- `dnn_backend_torch.diff` (489 lines) - current source vs clean tarball
-- `vf_dnn_processing.diff` (125 lines) - current source vs clean tarball
+### Files and their roles
 
-| Item | `ffmpeg-dnn-cuda-frames.patch` | Current ffmpeg source |
-|------|--------------------------------|----------------------|
-| Color conversion | PyTorch tensor ops only | NPP (`nppi_color_conversion.h`) |
-| NPP includes | No | Yes |
-| NPP `_Ctx` API | No | Yes (for CUDA 13+) |
-| Worker thread code | Preserved from upstream | **Removed** |
-| Complexity | ~173 lines added | ~489 lines changed |
+| File | Target Location | Purpose |
+|------|-----------------|---------|
+| `dnn_backend_tensorrt.cpp` | `libavfilter/dnn/` | Native TensorRT engine loading and inference |
+| `dnn_backend_torch.cpp` | `libavfilter/dnn/` | LibTorch backend with CUDA device support |
+| `vf_dnn_processing.c` | `libavfilter/` | Video filter with CUDA frame awareness |
+| `dnn_cuda_kernels.cu` | `libavfilter/dnn/` | GPU format conversion (HWC↔NCHW) |
+| `dnn_cuda_kernels.h` | `libavfilter/dnn/` | CUDA kernel declarations |
 
-### Key differences
+### Key modifications over upstream FFmpeg
 
-**1. Worker thread removal:** The current source removes the worker thread infrastructure from upstream ffmpeg (the `worker_thread`, `mutex`, `cond`, `pending_queue`, `worker_stop` fields). The patch file preserves the upstream structure.
+**dnn_backend_torch.cpp:**
+- `initXPU()` → `init()` for libtorch 2.6+ compatibility
+- Added CUDA device support (upstream only supports CPU/XPU)
+- TensorRT runtime loading for TRT-compiled models
+- Output tuple handling for TRT models
+- Fallback device detection for models without parameters
 
-**2. NPP color conversion:** The current source uses NPP's `nppiNV12ToRGB_8u_P2C3R_Ctx` for NV12→RGB conversion. The patch file uses PyTorch tensor ops for all color conversion.
+**dnn_backend_tensorrt.cpp:**
+- Native TensorRT backend (not in upstream FFmpeg)
+- Loads .engine files directly
+- Dynamic shape support via optimization profiles
+- GPU-resident inference pipeline
 
-**3. Output path:** The current source uses PyTorch tensor ops for RGB→NV12 on output (BT.601 matrix, avg_pool2d for chroma downsampling). The patch file copies tensor data directly to CUDA frame.
+**vf_dnn_processing.c:**
+- Added CUDA frame format support (`AV_PIX_FMT_CUDA`)
+- Hardware device awareness flags
+- Output hw_frames_ctx setup for CUDA output
 
-### Recommendation
+**dnn_cuda_kernels.cu:**
+- Zero-copy format conversion on GPU
+- Avoids GPU↔CPU transfers for input/output
 
-Revert ffmpeg to clean state, apply existing `ffmpeg-dnn-cuda-frames.patch`, benchmark first. The NPP changes were unauthorized scope creep and haven't been proven to help the 4x performance gap. The bottleneck is likely elsewhere (JIT recompilation, CUDA context switching, per-frame sync).
+## Application Integration
 
-## Files modified (not in patches)
+The super-resolution feature is integrated into the main netv application:
 
-These changes exist in `~/ffmpeg_sources/ffmpeg-snapshot/` but are NOT in the patch files:
+### Configuration (main.py)
 
-1. `libavfilter/dnn/dnn_backend_torch.cpp` (489 line diff):
-   - NPP includes (`nppi_color_conversion.h`, `cuda_runtime.h`)
-   - NPP `_Ctx` API calls for CUDA 13+ compatibility
-   - NppStreamContext setup per frame
-   - Removed worker thread infrastructure
-   - Full NV12↔RGB conversion via NPP and PyTorch
+```python
+SR_MODEL_PATH = ~/ffmpeg_build/models/realesr-general-x4v3.pt
+LIBTORCH_LIB_PATH = ~/ffmpeg_sources/libtorch/lib
 
-2. `libavfilter/vf_dnn_processing.c` (125 line diff):
-   - Added `hw_frames_ctx` field
-   - Added `AV_PIX_FMT_CUDA` to supported formats
-   - Output hw_frames_ctx setup for CUDA frames
-   - AVFILTER_FLAG_HWDEVICE and FF_FILTER_FLAG_HWFRAME_AWARE
+is_sr_available() → checks if model file exists
+```
 
-3. `ffbuild/config.mak`:
-   - Added `-lnppicc -lnppc -lcudart` to EXTRALIBS
+### User Settings
 
-## Next Steps
+| Setting | Values | Description |
+|---------|--------|-------------|
+| `sr_mode` | `off` | SR disabled (default) |
+| | `enhance` | Always apply SR for cleanup/sharpening |
+| | `upscale_1080` | Apply SR if source < 1080p |
+| | `upscale_4k` | Apply SR if source < 2160p |
 
-1. **Revert ffmpeg to clean state:**
-   ```bash
-   cd ~/ffmpeg_sources
-   rm -rf ffmpeg-snapshot
-   tar xjf ffmpeg-snapshot.tar.bz2
-   # Or re-download: curl -O https://ffmpeg.org/releases/ffmpeg-snapshot.tar.bz2
-   ```
+### Filter Generation (ffmpeg_command.py)
 
-2. **Apply patches:**
-   ```bash
-   cd ~/ffmpeg_sources/ffmpeg-snapshot
-   patch -p1 < ~/projects/netv/tools/patches/ffmpeg-dnn-cuda-frames.patch
-   ```
+The `_build_sr_filter()` function generates the FFmpeg filter chain:
+```
+format=rgb24,dnn_processing=dnn_backend=torch:model={path},scale=-2:{target_height}:flags=area
+```
 
-3. **Rebuild ffmpeg:**
-   ```bash
-   cd ~/projects/netv
-   ./tools/install-ffmpeg.sh
-   ```
+SR is only applied when:
+- `sr_mode` is not "off"
+- Content is VOD (not live streaming)
+- Encoder is NVENC or AMF (discrete GPU)
+- Model file exists
 
-4. **Run benchmark suite** with RealESRGAN_x4plus at 1280x720
-
-5. **Profile** to find the 4x slowdown cause
-
-6. **Optimize** based on actual data
+When SR is active:
+- Hardware pipeline is disabled (requires CPU frames)
+- NVENC preset changes to "p4" (more stable)
 
 ## TODO
 
-- [ ] Revert ffmpeg source to clean state
-- [ ] Apply patches from `tools/patches/`
 - [ ] Run complete benchmark suite (eager, torch.compile, TensorRT, FFmpeg)
 - [ ] Profile FFmpeg torch backend to find slowdown cause
-- [ ] Test TensorRT integration via FFmpeg
+- [ ] Test native TensorRT backend with dynamic shapes
 - [ ] Submit patches upstream to FFmpeg
