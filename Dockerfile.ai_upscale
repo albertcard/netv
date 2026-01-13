@@ -19,14 +19,11 @@ FROM ${FFMPEG_IMAGE}
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Install dependencies:
-# - Python for app + engine building
-# - TensorRT runtime (headers already in ffmpeg build, need runtime libs)
+# Install dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
     python3 \
     python3-pip \
-    python3-venv \
     && rm -rf /var/lib/apt/lists/*
 
 # App setup
@@ -37,10 +34,10 @@ COPY templates/ templates/
 COPY static/ static/
 COPY tools/ tools/
 
-# Install Python dependencies (app + engine building)
-RUN python3 -m pip install --no-cache-dir --break-system-packages . && \
-    python3 -m pip install --no-cache-dir --break-system-packages \
-    torch onnx tensorrt
+# Install Python dependencies (app + ai_upscale group)
+RUN pip install --no-cache-dir --break-system-packages uv && \
+    uv pip install --system --no-cache . && \
+    uv pip install --system --no-cache torch onnx tensorrt
 
 # Runtime config
 EXPOSE 8000
