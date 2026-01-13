@@ -247,6 +247,8 @@ def main():
                         help='TensorRT workspace size in GB (default: 4)')
     parser.add_argument('--keep-onnx', action='store_true',
                         help='Keep intermediate ONNX file')
+    parser.add_argument('--onnx-only', action='store_true',
+                        help='Only export ONNX, skip TensorRT engine build (for when GPU is busy)')
     args = parser.parse_args()
 
     # Handle fp32 flag
@@ -283,6 +285,12 @@ def main():
     try:
         export_onnx(model, opt_shape, onnx_path)
 
+        if args.onnx_only:
+            print(f"\n  ONNX saved to: {onnx_path}")
+            print("  Skipping TensorRT build (--onnx-only). Build later with:")
+            print(f"  trtexec --onnx={onnx_path} --saveEngine={args.output} --fp16")
+            return
+
         # Build TensorRT engine
         build_engine(onnx_path, args.output,
                      min_shape=min_shape,
@@ -291,7 +299,7 @@ def main():
                      fp16=args.fp16,
                      workspace_gb=args.workspace)
     finally:
-        if not args.keep_onnx and os.path.exists(onnx_path):
+        if not args.keep_onnx and not args.onnx_only and os.path.exists(onnx_path):
             os.remove(onnx_path)
 
     print()
