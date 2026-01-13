@@ -285,6 +285,31 @@ class TestStopSession:
             # Live session should still exist because it was recently accessed
             assert session_id in _transcode_sessions
 
+    def test_stop_session_multi_user_grace_period(self):
+        """Stopping session while another user watching should preserve session."""
+        with tempfile.TemporaryDirectory() as tmp:
+            session_id = "test-shared"
+            with _transcode_lock:
+                _transcode_sessions[session_id] = {
+                    "process": FakeProcess(alive=True),
+                    "dir": tmp,
+                    "url": "http://shared-stream",
+                    "is_vod": False,
+                    "last_access": time.time() - 10,  # User A started 10 sec ago
+                }
+                _url_to_session["http://shared-stream"] = session_id
+
+            # User B accesses stream (simulates progress poll or segment request)
+            touch_session(session_id)
+
+            # User A disconnects and triggers stop
+            with patch("ffmpeg_session.get_live_cache_timeout", return_value=0):
+                stop_session(session_id, force=False)
+
+            # Session should survive because User B just accessed it
+            assert session_id in _transcode_sessions
+            assert _transcode_sessions[session_id]["process"].returncode is None
+
     def test_stop_session_caches_vod(self):
         """Stop caches VOD session instead of removing it."""
         with tempfile.TemporaryDirectory() as tmp:
