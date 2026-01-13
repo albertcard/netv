@@ -28,7 +28,8 @@ source "$VENV_DIR/bin/activate"
 
 # Install dependencies
 echo "Installing dependencies..."
-pip install -q torch huggingface_hub onnx tensorrt basicsr realesrgan 2>/dev/null || true
+pip install --upgrade pip
+pip install torch huggingface_hub onnx tensorrt
 
 # Build engine with dynamic shapes
 echo "Building TensorRT engine..."
