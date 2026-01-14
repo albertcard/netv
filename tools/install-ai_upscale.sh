@@ -11,7 +11,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 MODEL_DIR="${MODEL_DIR:-$HOME/ffmpeg_build/models}"
-MODEL="${MODEL:-4x-compact}"
+MODEL="${MODEL:-recommended}"
 
 # Use uv run if in a uv project, otherwise plain python3
 if [ -f "$PROJECT_DIR/pyproject.toml" ] && command -v uv >/dev/null 2>&1; then
@@ -27,7 +27,9 @@ if [ "$1" = "-h" ] || [ "$1" = "--help" ]; then
     echo "Build TensorRT engines for AI Upscale."
     echo ""
     echo "Arguments:"
-    echo "  MODEL    Model to build, or 'all' for all models (default: $MODEL)"
+    echo "  MODEL    Model to build (default: $MODEL)"
+    echo "           'recommended' - 4x-compact, 2x-liveaction-span"
+    echo "           'all'         - all models including 4x-realesrgan"
     echo ""
     echo "Environment:"
     echo "  MODEL_DIR   Output directory (default: \$HOME/ffmpeg_build/models)"
@@ -43,18 +45,33 @@ if [ -n "$1" ]; then
     MODEL="$1"
 fi
 
+# Handle "recommended" option - build recommended models
+if [ "$MODEL" = "recommended" ]; then
+    echo "========================================"
+    echo "AI Upscale: Building recommended models"
+    echo "========================================"
+    echo ""
+    for m in 4x-compact 2x-liveaction-span; do
+        echo ">>> Building $m..."
+        MODEL="$m" "$0"
+        echo ""
+    done
+    echo "Done! Recommended models built."
+    exit 0
+fi
+
 # Handle "all" option - build all available models
 if [ "$MODEL" = "all" ]; then
     echo "========================================"
     echo "AI Upscale: Building ALL models"
     echo "========================================"
     echo ""
-    for m in 2x-liveaction-span 4x-compact; do
+    for m in 4x-compact 2x-liveaction-span 4x-realesrgan; do
         echo ">>> Building $m..."
         MODEL="$m" "$0"
         echo ""
     done
-    echo "All models built!"
+    echo "Done! All models built."
     exit 0
 fi
 

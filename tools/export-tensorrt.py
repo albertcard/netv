@@ -144,16 +144,21 @@ MODELS = {
         "scale": 4,
         "arch": "compact",
     },
-    # Legacy alias for backwards compatibility
+    # 4x-realesrgan - not recommended (overly smooths faces)
+    "4x-realesrgan": {
+        "description": "RealESRGAN 4x - smooths faces (not recommended)",
+        "url": "https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth",
+        "filename": "RealESRGAN_x4plus.pth",
+        "scale": 4,
+        "arch": "rrdbnet",
+    },
+    # Legacy aliases for backwards compatibility
     "compact": {"alias": "4x-compact"},
-    # NOTE: 4x-rrdbnet (RRDBNet/RealESRGAN_x4plus) was removed because:
+    "realesrgan": {"alias": "4x-realesrgan"},
+    # NOTE: 4x-rrdbnet was removed because:
     # - 1080p engine build fails with OOM even on 32GB VRAM (RTX 5090)
     # - 720p engine causes "Invalid frame dimensions 0x0" errors during playback
-    # - Model is ~10x larger and ~15x slower than 4x-compact with marginal quality gain
-    #
-    # NOTE: realesrgan (legacy name for 4x-compact) engines removed because:
-    # - Overly smooths faces, removing detail
-    # - Use 4x-compact instead which preserves more texture
+    # - Same weights as 4x-realesrgan but different name
 }
 
 
