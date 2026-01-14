@@ -562,24 +562,23 @@
         </div>
         <p class="text-xs text-gray-400 mt-1">Maximum quality ceiling (won't use more bits than source provides)</p>
       </div>
-      <div id="sr-settings" class="{% if not sr_available %}opacity-50{% endif %}">
+      <div id="sr-settings">
         <label class="block text-sm font-medium mb-2">AI Upscale</label>
         <div class="flex flex-wrap gap-4">
           <label class="flex items-center gap-2 text-sm">
             <input type="radio" name="sr_model" value="" {% if not sr_model %}checked{% endif %}
-                   {% if not sr_available %}disabled{% endif %}
                    class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
-            <span>Disabled</span>
+            <span>None</span>
           </label>
           <label class="flex items-center gap-2 text-sm {% if '4x-compact' not in sr_models %}opacity-40{% endif %}">
             <input type="radio" name="sr_model" value="4x-compact" {% if sr_model == '4x-compact' %}checked{% endif %}
-                   {% if not sr_available or '4x-compact' not in sr_models %}disabled{% endif %}
+                   {% if '4x-compact' not in sr_models %}disabled{% endif %}
                    class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
             <span>4x-compact (quality)</span>
           </label>
           <label class="flex items-center gap-2 text-sm {% if '2x-liveaction-span' not in sr_models %}opacity-40{% endif %}">
             <input type="radio" name="sr_model" value="2x-liveaction-span" {% if sr_model == '2x-liveaction-span' %}checked{% endif %}
-                   {% if not sr_available or '2x-liveaction-span' not in sr_models %}disabled{% endif %}
+                   {% if '2x-liveaction-span' not in sr_models %}disabled{% endif %}
                    class="setting-input w-4 h-4 bg-gray-700 border-gray-600 text-blue-500 focus:ring-blue-500">
             <span>2x-liveaction-span (fast)</span>
           </label>
