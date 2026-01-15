@@ -162,6 +162,19 @@ docker compose up -d
 
 Open http://localhost:8000. To update: `docker compose pull && docker compose up -d`
 
+#### NVIDIA GPU (NVENC)
+
+Requires [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+Use the image matching your driver version ([source](https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html)):
+
+| Driver | CUDA | Install |
+|--------|------|---------|
+| 550 | 12-4 | `FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:cuda12-4 docker compose --profile nvidia up -d` |
+| 560 | 12-6 | `FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:cuda12-6 docker compose --profile nvidia up -d` |
+| 570 | 12-8 | `FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:cuda12-8 docker compose --profile nvidia up -d` |
+| 580 | 13-0 | `FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:cuda13-0 docker compose --profile nvidia up -d` |
+| 590 | 13-1 | `docker compose --profile nvidia up -d` |
+
 #### AI Upscale Image (NVIDIA GPU)
 
 For real-time 4x AI upscaling (720p → 4K at 85fps on RTX 5090):
@@ -354,19 +367,16 @@ And set up a cron job to refresh the guide daily (e.g.,
 Hardware transcoding is auto-detected. Check Settings to see available encoders.
 
 - **Intel/AMD (VAAPI)**: Works automatically if `/dev/dri` exists.
-- **NVIDIA**: Requires [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-  and **driver 570+** (NVENC API 13): `docker compose --profile nvidia up -d`
+- **NVIDIA**: Requires [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+  Use the image matching your driver version ([source](https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html)):
 
-  <details>
-  <summary>Stuck on driver 550? (Synology, Unraid, etc.)</summary>
-
-  The pre-built image requires driver 570+. For older drivers, build with CUDA 12.4:
-  ```bash
-  docker build --build-arg CUDA_VERSION=12-4 -f Dockerfile.ffmpeg -t netv-ffmpeg:local .
-  docker build --build-arg FFMPEG_IMAGE=netv-ffmpeg:local -t netv:local .
-  ```
-  Then update your `docker-compose.yml` to use `netv:local` instead of the ghcr image.
-  </details>
+  | Driver | CUDA | Install |
+  |--------|------|---------|
+  | 550 | 12-4 | `FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:cuda12-4 docker compose --profile nvidia up -d` |
+  | 560 | 12-6 | `FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:cuda12-6 docker compose --profile nvidia up -d` |
+  | 570 | 12-8 | `FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:cuda12-8 docker compose --profile nvidia up -d` |
+  | 580 | 13-0 | `FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:cuda13-0 docker compose --profile nvidia up -d` |
+  | 590 | 13-1 | `docker compose --profile nvidia up -d` |
 - **No GPU / VPS**: If `/dev/dri` doesn't exist, comment out the `devices` section
   in `docker-compose.yml` or compose will fail to start
 
