@@ -384,6 +384,47 @@ Hardware transcoding is auto-detected. Check Settings to see available encoders.
 - **No GPU / VPS**: If `/dev/dri` doesn't exist, comment out the `devices` section
   in `docker-compose.yml` or compose will fail to start
 
+### How do I install CUDA on Ubuntu?
+
+Tested on Ubuntu 24.04 LTS, 25.04, and 25.10.
+
+```bash
+# Step 1: Remove existing NVIDIA packages
+sudo apt purge -y '^nvidia-.*' '^libnvidia-.*' '^cuda-.*' '^libcuda-.*' '^cudnn[0-9]*-.*' '^libcudnn[0-9]*-.*'
+sudo apt autoremove -y
+
+# Step 2: Add NVIDIA CUDA repository
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt update
+
+# Step 3: Install driver and CUDA toolkit
+# For Turing+ GPUs (RTX 20 series and newer, compute >=7.5):
+sudo apt install -y nvidia-open cuda-toolkit-13 cudnn9-cuda-13 libcudnn9-dev-cuda-13
+
+# For Maxwell/Pascal GPUs (GTX 900/1000 series, compute <7.5):
+# Driver 590 dropped support. Pin to 580 and use CUDA 12.9.
+# Note: Maxwell/Pascal requires nvidia-driver (proprietary), not nvidia-open.
+# sudo apt install -y nvidia-driver-pinning-580
+# sudo apt install -y nvidia-driver-580 cuda-toolkit-12-9 cudnn9-cuda-12-9 libcudnn9-dev-cuda-12
+# sudo update-alternatives --set cuda /usr/local/cuda-12.9
+
+# Step 4: Configure environment
+tee -a ~/.bashrc << 'EOF'
+export CUDA_HOME=/usr/local/cuda
+if [ -d $CUDA_HOME ]; then
+    export PATH="${CUDA_HOME}/bin${PATH:+:${PATH}}"
+    export LD_LIBRARY_PATH="${CUDA_HOME}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+unset CUDA_HOME
+EOF
+source ~/.bashrc
+
+# Step 5: Verify installation
+nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv,noheader
+nvcc --version
+```
+
 ### What are the keyboard shortcuts?
 
 | Key | Action |
