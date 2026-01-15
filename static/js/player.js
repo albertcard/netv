@@ -999,6 +999,11 @@
       } else if (currentHls?.subtitleTracks?.length > 0) {
         currentHls.subtitleTrack = idx;
         currentHls.subtitleDisplay = true;
+        // iOS: also set TextTrack.mode directly (HLS.js property change doesn't always trigger render)
+        const tracks = Array.from(video.textTracks).filter(
+          t => t.kind === 'subtitles' || t.kind === 'captions'
+        );
+        tracks.forEach((t, i) => t.mode = i === idx ? 'showing' : 'hidden');
       } else {
         const tracks = Array.from(video.textTracks).filter(t => t.kind === 'subtitles' || t.kind === 'captions');
         tracks.forEach((t, i) => t.mode = i === idx ? 'showing' : 'hidden');
