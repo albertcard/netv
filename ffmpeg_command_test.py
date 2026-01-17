@@ -1023,6 +1023,96 @@ class TestProbeCacheManagement:
         assert stats[0]["episode_count"] == 2
 
 
+class TestResolveHlsMasterPlaylist:
+    """Tests for resolve_hls_master_playlist function."""
+
+    def test_non_m3u8_url_returns_unchanged(self):
+        """Non-m3u8 URLs should be returned unchanged."""
+        from ffmpeg_command import resolve_hls_master_playlist
+
+        url = "http://example.com/video.mp4"
+        assert resolve_hls_master_playlist(url) == url
+
+    def test_master_playlist_selects_highest_bandwidth(self):
+        """Master playlist should resolve to highest bandwidth variant."""
+        from unittest.mock import MagicMock, patch
+
+        from ffmpeg_command import resolve_hls_master_playlist
+
+        master_playlist = """#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=500000,RESOLUTION=640x360
+low.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=1500000,RESOLUTION=1280x720
+mid.m3u8
+#EXT-X-STREAM-INF:BANDWIDTH=3000000,RESOLUTION=1920x1080
+high.m3u8
+"""
+        mock_response = MagicMock()
+        mock_response.read.return_value = master_playlist.encode("utf-8")
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_response):
+            result = resolve_hls_master_playlist("http://example.com/master.m3u8")
+
+        assert result == "http://example.com/high.m3u8"
+
+    def test_media_playlist_returns_unchanged(self):
+        """Media playlist (not master) should return original URL."""
+        from unittest.mock import MagicMock, patch
+
+        from ffmpeg_command import resolve_hls_master_playlist
+
+        media_playlist = """#EXTM3U
+#EXT-X-VERSION:3
+#EXT-X-TARGETDURATION:10
+#EXTINF:10.0,
+segment0.ts
+#EXTINF:10.0,
+segment1.ts
+"""
+        mock_response = MagicMock()
+        mock_response.read.return_value = media_playlist.encode("utf-8")
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_response):
+            result = resolve_hls_master_playlist("http://example.com/stream.m3u8")
+
+        assert result == "http://example.com/stream.m3u8"
+
+    def test_fetch_error_returns_original_url(self):
+        """On fetch error, should return original URL."""
+        from unittest.mock import patch
+
+        from ffmpeg_command import resolve_hls_master_playlist
+
+        with patch("urllib.request.urlopen", side_effect=Exception("Network error")):
+            result = resolve_hls_master_playlist("http://example.com/master.m3u8")
+
+        assert result == "http://example.com/master.m3u8"
+
+    def test_relative_url_resolved_correctly(self):
+        """Relative variant URLs should be resolved against base URL."""
+        from unittest.mock import MagicMock, patch
+
+        from ffmpeg_command import resolve_hls_master_playlist
+
+        master_playlist = """#EXTM3U
+#EXT-X-STREAM-INF:BANDWIDTH=3000000
+../streams/1080p/index.m3u8
+"""
+        mock_response = MagicMock()
+        mock_response.read.return_value = master_playlist.encode("utf-8")
+        mock_response.__enter__ = MagicMock(return_value=mock_response)
+        mock_response.__exit__ = MagicMock(return_value=False)
+
+        with patch("urllib.request.urlopen", return_value=mock_response):
+            result = resolve_hls_master_playlist("http://example.com/hls/master.m3u8")
+
+        assert result == "http://example.com/streams/1080p/index.m3u8"
+
+
 if __name__ == "__main__":
     from testing import run_tests
 

@@ -32,6 +32,7 @@ from ffmpeg_command import (
     get_user_agent,
     invalidate_series_probe_cache,
     probe_media,
+    resolve_hls_master_playlist,
     restore_probe_cache_entry,
 )
 
@@ -701,6 +702,9 @@ async def _handle_existing_vod_session(
     hls_duration = _calc_hls_duration(playlist_path, len(segments))
     log.info("Resuming session %s from %.1fs", existing_id, hls_duration)
 
+    # Resolve HLS master playlist to highest bandwidth variant
+    url = await asyncio.to_thread(resolve_hls_master_playlist, url)
+
     media_info = (
         (await asyncio.to_thread(probe_media, url, None, None, ""))[0] if do_probe else None
     )
@@ -812,6 +816,9 @@ async def _do_start_transcode(
     source_id: str = "",
 ) -> dict[str, Any]:
     """Core transcode logic. Raises HTTPException on failure."""
+    # Resolve HLS master playlist to highest bandwidth variant
+    url = await asyncio.to_thread(resolve_hls_master_playlist, url)
+
     settings = get_settings()
     hw = settings.get("transcode_hw", "software")
     max_resolution = settings.get("max_resolution", "1080p")
@@ -1183,6 +1190,9 @@ async def seek_transcode(session_id: str, seek_time: float) -> dict[str, Any]:
     for vtt_file in output_path.glob("sub*.vtt"):
         vtt_file.unlink(missing_ok=True)
 
+    # Resolve HLS master playlist to highest bandwidth variant
+    url = await asyncio.to_thread(resolve_hls_master_playlist, info.url)
+
     # Use probe_series if series_id, else probe_movies
     probe_setting = "probe_series" if info.series_id else "probe_movies"
     do_probe = settings.get(probe_setting, False)
@@ -1190,7 +1200,7 @@ async def seek_transcode(session_id: str, seek_time: float) -> dict[str, Any]:
         media_info = (
             await asyncio.to_thread(
                 probe_media,
-                info.url,
+                url,
                 info.series_id,
                 info.episode_id,
             )
@@ -1210,7 +1220,7 @@ async def seek_transcode(session_id: str, seek_time: float) -> dict[str, Any]:
             )
 
     cmd = build_hls_ffmpeg_cmd(
-        info.url,
+        url,
         hw,
         info.output_dir,
         True,
