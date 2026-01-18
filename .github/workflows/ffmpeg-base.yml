@@ -27,6 +27,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+    strategy:
+      matrix:
+        cuda: ['12-5', '12-6', '12-9', '13-1']
 
     steps:
       - uses: actions/checkout@v4
@@ -64,9 +67,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=latest
-            type=raw,value=${{ steps.version.outputs.tag }}
-            type=raw,value=${{ steps.date.outputs.date }},enable=${{ steps.version.outputs.version == 'snapshot' }}
+            type=raw,value=cuda${{ matrix.cuda }}
+            type=raw,value=latest,enable=${{ matrix.cuda == '13-1' }}
+            type=raw,value=${{ steps.date.outputs.date }}-cuda${{ matrix.cuda }},enable=${{ steps.version.outputs.version == 'snapshot' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -79,10 +82,11 @@ jobs:
           build-args: |
             BUILD_DATE=${{ steps.date.outputs.datetime }}
             FFMPEG_VERSION=${{ steps.version.outputs.version }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache,mode=max
+            CUDA_VERSION=${{ matrix.cuda }}
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-cuda${{ matrix.cuda }}
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-cuda${{ matrix.cuda }},mode=max
 
       - name: Verify image
         run: |
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }}
-          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.tag }} ffmpeg -version
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ matrix.cuda }}
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ matrix.cuda }} ffmpeg -version

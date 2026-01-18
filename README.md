@@ -162,6 +162,31 @@ docker compose up -d
 
 Open http://localhost:8000. To update: `docker compose pull && docker compose up -d`
 
+#### NVIDIA GPU (NVENC)
+
+Requires [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+
+Check your driver and compute capability:
+```bash
+nvidia-smi --query-gpu=driver_version,compute_cap --format=csv,noheader
+# Example: 580.87.02, 8.6 → Driver 580, compute ≥7.5 → use cuda13-1
+```
+
+Find your CUDA version ([source](https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html)):
+
+| Driver | < 7.5 (Maxwell/Pascal/Volta) | ≥ 7.5 (Turing+) |
+|--------|------------------------------|-----------------|
+| 555 | cuda12-5 | cuda12-5 |
+| 560 | cuda12-6 | cuda12-6 |
+| 570 | cuda12-9 | cuda12-9 |
+| 580 | cuda12-9 | cuda13-1 |
+| 590 | *unsupported* | cuda13-1 |
+
+Then run:
+```bash
+FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:<cuda-version> docker compose --profile nvidia up -d
+```
+
 #### AI Upscale Image (NVIDIA GPU)
 
 For real-time 4x AI upscaling (720p → 4K at 85fps on RTX 5090):
@@ -354,21 +379,52 @@ And set up a cron job to refresh the guide daily (e.g.,
 Hardware transcoding is auto-detected. Check Settings to see available encoders.
 
 - **Intel/AMD (VAAPI)**: Works automatically if `/dev/dri` exists.
-- **NVIDIA**: Requires [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html)
-  and **driver 570+** (NVENC API 13): `docker compose --profile nvidia up -d`
-
-  <details>
-  <summary>Stuck on driver 550? (Synology, Unraid, etc.)</summary>
-
-  The pre-built image requires driver 570+. For older drivers, build with CUDA 12.4:
-  ```bash
-  docker build --build-arg CUDA_VERSION=12-4 -f Dockerfile.ffmpeg -t netv-ffmpeg:local .
-  docker build --build-arg FFMPEG_IMAGE=netv-ffmpeg:local -t netv:local .
-  ```
-  Then update your `docker-compose.yml` to use `netv:local` instead of the ghcr image.
-  </details>
+- **NVIDIA**: Requires [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+  See [NVIDIA GPU (NVENC)](#nvidia-gpu-nvenc) installation section for driver/compute compatibility table.
 - **No GPU / VPS**: If `/dev/dri` doesn't exist, comment out the `devices` section
   in `docker-compose.yml` or compose will fail to start
+
+### How do I install CUDA on Ubuntu?
+
+Tested on Ubuntu 24.04 LTS, 25.04, and 25.10.
+
+```bash
+# Step 1: Remove existing NVIDIA packages
+sudo apt purge -y '^nvidia-.*' '^libnvidia-.*' '^cuda-.*' '^libcuda-.*' '^cudnn[0-9]*-.*' '^libcudnn[0-9]*-.*'
+sudo apt autoremove -y
+
+# Step 2: Add NVIDIA CUDA repository
+wget https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb
+sudo dpkg -i cuda-keyring_1.1-1_all.deb
+sudo apt modernize-sources || true
+sudo apt update
+
+# Step 3: Install driver and CUDA toolkit
+# For Turing+ GPUs (RTX 20 series and newer, compute >=7.5):
+sudo apt install -y nvidia-open cuda-toolkit-13 cudnn9-cuda-13 libcudnn9-dev-cuda-13
+
+# For Maxwell/Pascal GPUs (GTX 900/1000 series, compute <7.5):
+# Driver 590 dropped support. Pin to 580 and use CUDA 12.9.
+# Note: Maxwell/Pascal requires nvidia-driver (proprietary), not nvidia-open.
+# sudo apt install -y nvidia-driver-pinning-580
+# sudo apt install -y nvidia-driver-580 cuda-toolkit-12-9 cudnn9-cuda-12-9 libcudnn9-dev-cuda-12
+# sudo update-alternatives --set cuda /usr/local/cuda-12.9
+
+# Step 4: Configure environment
+tee -a ~/.bashrc << 'EOF'
+export CUDA_HOME=/usr/local/cuda
+if [ -d $CUDA_HOME ]; then
+    export PATH="${CUDA_HOME}/bin${PATH:+:${PATH}}"
+    export LD_LIBRARY_PATH="${CUDA_HOME}/lib64${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
+fi
+unset CUDA_HOME
+EOF
+source ~/.bashrc
+
+# Step 5: Verify installation
+nvidia-smi --query-gpu=name,compute_cap,driver_version --format=csv,noheader
+nvcc --version
+```
 
 ### What are the keyboard shortcuts?
 

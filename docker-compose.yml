@@ -7,7 +7,10 @@
 #
 # Run:
 #   docker compose up -d                    # Auto-detects hardware (Intel/AMD)
-#   docker compose --profile nvidia up -d   # NVIDIA GPU
+#   docker compose --profile nvidia up -d   # NVIDIA GPU (driver 580+, Turing+)
+#
+# NVIDIA with older drivers/GPUs (see README for driver/compute compatibility):
+#   FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:cuda12-9 docker compose --profile nvidia up -d
 #
 # No GPU or /dev/dri? Comment out the 'devices' section below.
 

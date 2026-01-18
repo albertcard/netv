@@ -614,6 +614,74 @@ def _lang_display_name(code: str) -> str:
     return _LANG_NAMES.get(code, code.upper())
 
 
+def resolve_hls_master_playlist(url: str) -> str:
+    """Resolve HLS master playlist to highest bandwidth variant URL.
+
+    If the URL points to an HLS master playlist (contains #EXT-X-STREAM-INF),
+    this fetches and parses it to find the variant with the highest bandwidth.
+    Returns the resolved variant URL, or the original URL if not a master playlist
+    or on any error.
+    """
+    from urllib.parse import urljoin
+
+    import urllib.request
+
+    if not url.endswith(".m3u8") and ".m3u8?" not in url:
+        return url  # Not an m3u8, return as-is
+
+    try:
+        req = urllib.request.Request(url)
+        user_agent = get_user_agent()
+        if user_agent:
+            req.add_header("User-Agent", user_agent)
+        with urllib.request.urlopen(req, timeout=10) as response:
+            content = response.read().decode("utf-8", errors="replace")
+
+        # Check if this is a master playlist (has #EXT-X-STREAM-INF)
+        if "#EXT-X-STREAM-INF" not in content:
+            return url  # Not a master playlist
+
+        # Parse variants: each #EXT-X-STREAM-INF is followed by a URL line
+        lines = content.strip().split("\n")
+        variants: list[tuple[int, str]] = []
+        for i, line in enumerate(lines):
+            if line.startswith("#EXT-X-STREAM-INF:"):
+                # Extract BANDWIDTH from the tag
+                bandwidth = 0
+                for attr in line.split(":")[1].split(","):
+                    if attr.startswith("BANDWIDTH="):
+                        with suppress(ValueError):
+                            bandwidth = int(attr.split("=")[1])
+                        break
+                # Next non-comment line is the variant URL
+                for j in range(i + 1, len(lines)):
+                    variant_line = lines[j].strip()
+                    if variant_line and not variant_line.startswith("#"):
+                        # Resolve relative URL
+                        variant_url = urljoin(url, variant_line)
+                        variants.append((bandwidth, variant_url))
+                        break
+
+        if not variants:
+            log.warning("HLS master playlist has no variants: %s", url[:80])
+            return url
+
+        # Select highest bandwidth variant
+        variants.sort(key=lambda x: x[0], reverse=True)
+        best_bandwidth, best_url = variants[0]
+        log.info(
+            "HLS master playlist resolved: %d variants, selected %d bps: %s",
+            len(variants),
+            best_bandwidth,
+            best_url[:80],
+        )
+        return best_url
+
+    except Exception as e:
+        log.warning("Failed to resolve HLS master playlist %s: %s", url[:80], e)
+        return url
+
+
 def probe_media(
     url: str,
     series_id: int | None = None,
