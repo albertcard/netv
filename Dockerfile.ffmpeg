@@ -78,9 +78,17 @@ ENV NVCC_GENCODE=${NVCC_GENCODE}
 # Install sudo (install-ffmpeg.sh uses it, works as no-op when root)
 RUN apt-get update && apt-get install -y sudo
 
-# Copy and run the build script
+# Copy build script (no external patches required)
 COPY tools/install-ffmpeg.sh /tmp/
-RUN chmod +x /tmp/install-ffmpeg.sh && /tmp/install-ffmpeg.sh
+
+# Run the build script
+# Note: CUDA 12.4 builds skip TensorRT to avoid version mismatch
+RUN chmod +x /tmp/install-ffmpeg.sh && \
+    if [ "$CUDA_VERSION" = "12-4" ]; then \
+        echo "CUDA 12-4 detected: disabling TensorRT"; \
+        export ENABLE_TENSORRT=0; \
+    fi; \
+    /tmp/install-ffmpeg.sh
 
 # =============================================================================
 # Runtime stage: minimal image with just FFmpeg binaries
@@ -119,7 +127,7 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     . /etc/os-release && \
     if [ "$VERSION_CODENAME" = "jammy" ]; then \
         LIBVPX=libvpx7; \
-        LIBSRT=libsrt1.4-gnutls; \
+        LIBSRT=libsrt1.4-openssl; \
         LIBUNISTRING=libunistring2; \
         LIBASOUND=libasound2; \
         LIBSNDIO=libsndio7.0; \
