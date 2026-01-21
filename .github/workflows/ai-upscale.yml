@@ -96,7 +96,8 @@ jobs:
         run: |
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ steps.cuda.outputs.version }}
           # Verify everything that should be enabled is actually linked
-          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ steps.cuda.outputs.version }} sh -c "
+          # Note: --entrypoint bypasses the default entrypoint which tries to build TensorRT engines (requires GPU)
+          docker run --rm --entrypoint sh ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ steps.cuda.outputs.version }} -c "
             echo '=== Verifying AI Upscale build ==='
             LDD_OUTPUT=\$(ldd /usr/local/bin/ffmpeg)
 
@@ -131,6 +132,13 @@ jobs:
             echo 'OK: onnx installed'
             pip3 show tensorrt >/dev/null 2>&1 || { echo 'ERROR: tensorrt not installed'; exit 1; }
             echo 'OK: tensorrt installed'
+
+            # Verify AI upscale scripts exist
+            echo '=== Verifying AI upscale scripts ==='
+            test -x /app/tools/install-ai_upscale.sh || { echo 'ERROR: install-ai_upscale.sh not found'; exit 1; }
+            echo 'OK: install-ai_upscale.sh exists'
+            test -f /app/tools/export-tensorrt.py || { echo 'ERROR: export-tensorrt.py not found'; exit 1; }
+            echo 'OK: export-tensorrt.py exists'
 
             echo ''
             echo '=== All verifications passed ==='
