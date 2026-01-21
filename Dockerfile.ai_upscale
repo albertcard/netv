@@ -17,6 +17,10 @@
 ARG FFMPEG_IMAGE=ghcr.io/jvdillon/netv-ffmpeg:latest
 FROM ${FFMPEG_IMAGE}
 
+# Build metadata (passed from workflow, used for documentation/debugging)
+ARG NVIDIA=cuda:13.0
+ARG BASE_IMAGE=ubuntu:24.04
+
 ENV DEBIAN_FRONTEND=noninteractive
 
 # Install dependencies
@@ -34,8 +38,11 @@ COPY templates/ templates/
 COPY static/ static/
 COPY tools/ tools/
 
-# Install Python dependencies (app + ai_upscale group)
-RUN pip install --no-cache-dir --break-system-packages . torch onnx tensorrt && \
+# Install Python dependencies
+# --ignore-installed: avoids "Cannot uninstall X, RECORD file not found" for apt packages
+# --break-system-packages: required for PEP 668 (Ubuntu 24.04+), doesn't exist in pip 22.0 (Ubuntu 22.04)
+RUN PIP_BSP=$(pip install --help 2>&1 | grep -q break-system-packages && echo --break-system-packages); \
+    python3 -m pip install --no-cache-dir --ignore-installed $PIP_BSP . torch onnx tensorrt && \
     python3 -c "import torch; import onnx; import tensorrt; print('AI packages verified')"
 
 # Runtime config

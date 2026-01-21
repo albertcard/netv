@@ -75,6 +75,11 @@ ENV FFMPEG_VERSION=${FFMPEG_VERSION}
 ENV NVIDIA=${NVIDIA}
 ENV NVCC_GENCODE=${NVCC_GENCODE}
 
+# Pre-configure timezone to prevent tzdata interactive prompts
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+RUN ln -fs /usr/share/zoneinfo/$TZ /etc/localtime && echo $TZ > /etc/timezone
+
 # Install sudo (install-ffmpeg.sh uses it, works as no-op when root)
 RUN apt-get update && apt-get install -y sudo
 

@@ -25,10 +25,14 @@ jobs:
     strategy:
       matrix:
         include:
-          - cuda: "12.4"
-          - cuda: "12.6"
-          - cuda: "12.8"
-          - cuda: "13.0"
+          - nvidia: 'cuda:12.4'
+            base_image: 'ubuntu:22.04'
+          - nvidia: 'cuda:12.6'
+            base_image: 'ubuntu:24.04'
+          - nvidia: 'cuda:12.8'
+            base_image: 'ubuntu:24.04'
+          - nvidia: 'cuda:13.0'
+            base_image: 'ubuntu:24.04'
             latest: true
 
     steps:
@@ -46,13 +50,21 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Parse CUDA version
+        id: cuda
+        run: |
+          # Extract "12.4" from "cuda:12.4"
+          CUDA_VER="${{ matrix.nvidia }}"
+          CUDA_VER="${CUDA_VER#cuda:}"
+          echo "version=$CUDA_VER" >> $GITHUB_OUTPUT
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=cuda${{ matrix.cuda }}
+            type=raw,value=cuda${{ steps.cuda.outputs.version }}
             type=raw,value=latest,enable=${{ matrix.latest == true }}
 
       - name: Build and push
@@ -64,14 +76,16 @@ jobs:
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            FFMPEG_IMAGE=ghcr.io/${{ github.repository }}-ffmpeg:cuda${{ matrix.cuda }}
+            FFMPEG_IMAGE=ghcr.io/${{ github.repository }}-ffmpeg:cuda${{ steps.cuda.outputs.version }}
+            NVIDIA=${{ matrix.nvidia }}
+            BASE_IMAGE=${{ matrix.base_image }}
           no-cache: true
 
       - name: Verify image
         run: |
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ matrix.cuda }}
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ steps.cuda.outputs.version }}
           # Verify everything that should be enabled is actually linked
-          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ matrix.cuda }} sh -c "
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ steps.cuda.outputs.version }} sh -c "
             echo '=== Verifying AI Upscale build ==='
             LDD_OUTPUT=\$(ldd /usr/local/bin/ffmpeg)
 

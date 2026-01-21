@@ -23,7 +23,6 @@ ENV DEBIAN_FRONTEND=noninteractive
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gosu \
     python3 \
-    python3-venv \
     python3-pip \
     $(if [ ! -f /usr/local/bin/ffmpeg ]; then echo "ffmpeg"; fi) \
     && rm -rf /var/lib/apt/lists/*
@@ -36,7 +35,10 @@ COPY templates/ templates/
 COPY static/ static/
 
 # Install Python dependencies
-RUN python3 -m pip install --no-cache-dir --break-system-packages .
+# --ignore-installed: avoids "Cannot uninstall X, RECORD file not found" for apt packages
+# --break-system-packages: required for PEP 668 (Ubuntu 24.04+), doesn't exist in pip 22.0 (Ubuntu 22.04)
+RUN PIP_BSP=$(pip install --help 2>&1 | grep -q break-system-packages && echo --break-system-packages); \
+    python3 -m pip install --no-cache-dir --ignore-installed $PIP_BSP .
 
 # Runtime config
 EXPOSE 8000

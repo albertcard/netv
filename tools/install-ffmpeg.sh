@@ -4,9 +4,8 @@
 # https://trac.ffmpeg.org/wiki/CompilationGuide/Ubuntu
 set -e
 
-# Ensure noninteractive installs in containers.
+# Noninteractive apt installs (prevents prompts)
 export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
-export TZ="${TZ:-Etc/UTC}"
 
 # Capture script directory before any cd commands
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -296,10 +295,6 @@ APT_PACKAGES=(
 [ "$BUILD_LIBX264" != "1" ] && APT_PACKAGES+=(libx264-dev)
 # Note: TensorRT packages (libnvinfer-dev) installed later after CUDA repo is set up
 if [ "$SKIP_DEPS" != "1" ]; then
-    if [ -n "$TZ" ]; then
-        ln -fs "/usr/share/zoneinfo/$TZ" /etc/localtime
-        echo "$TZ" > /etc/timezone
-    fi
     sudo apt-get update && sudo apt-get install -y "${APT_PACKAGES[@]}"
     ensure_meson_min_version 0.63
 fi
