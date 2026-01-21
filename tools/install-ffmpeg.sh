@@ -346,7 +346,7 @@ if [ "$ENABLE_NVIDIA_CUDA" = "1" ]; then
                 # Detect Ubuntu version for correct CUDA repo (24.04 -> ubuntu2404, 25.04 -> ubuntu2504)
                 UBUNTU_VERSION=$(grep VERSION_ID /etc/os-release | cut -d'"' -f2 | tr -d '.')
                 CUDA_REPO_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-keyring_1.1-1_all.deb"
-                wget -q "$CUDA_REPO_URL" -O cuda-keyring.deb
+                wget --progress=dot:giga "$CUDA_REPO_URL" -O cuda-keyring.deb
                 sudo dpkg -i cuda-keyring.deb
                 rm cuda-keyring.deb
                 sudo apt-get update
@@ -741,7 +741,7 @@ if [ "$BUILD_LIBPLACEBO" = "1" ]; then
         echo "Downloading Vulkan SDK $VULKAN_SDK_VERSION..."
         cd "$SRC_DIR"
         rm -f vulkansdk.tar.xz    # Clean up any partial download
-        wget -q -O vulkansdk.tar.xz "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.xz"
+        wget --progress=dot:giga -O vulkansdk.tar.xz "https://sdk.lunarg.com/sdk/download/${VULKAN_SDK_VERSION}/linux/vulkansdk-linux-x86_64-${VULKAN_SDK_VERSION}.tar.xz"
         tar xf vulkansdk.tar.xz
         mv "${VULKAN_SDK_VERSION}" "vulkan-sdk-${VULKAN_SDK_VERSION}"
         rm -f vulkansdk.tar.xz
@@ -816,7 +816,7 @@ if [ "$ENABLE_LIBTORCH" = "1" ]; then
         else
             LIBTORCH_URL="https://download.pytorch.org/libtorch/${TORCH_VARIANT}/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${TORCH_VARIANT}.zip"
         fi
-        wget -q -O libtorch.zip "$LIBTORCH_URL"
+        wget --progress=dot:giga -O libtorch.zip "$LIBTORCH_URL"
         unzip -q libtorch.zip
         rm -f libtorch.zip
         touch "$LIBTORCH_MARKER"
@@ -862,13 +862,13 @@ cd "$SRC_DIR"
 if [ ! -d "$FFMPEG_DIR" ]; then
     if [ "$FFMPEG_VERSION" = "snapshot" ]; then
         rm -f ffmpeg-snapshot.tar.bz2    # Clean up any partial download
-        wget -q -O ffmpeg-snapshot.tar.bz2 https://ffmpeg.org/releases/ffmpeg-snapshot.tar.bz2
+        wget --progress=dot:giga -O ffmpeg-snapshot.tar.bz2 https://ffmpeg.org/releases/ffmpeg-snapshot.tar.bz2
         tar xjf ffmpeg-snapshot.tar.bz2
         mv ffmpeg "$FFMPEG_DIR"
         rm -f ffmpeg-snapshot.tar.bz2
     else
         rm -f "ffmpeg-${FFMPEG_VERSION}.tar.xz"    # Clean up any partial download
-        wget -q -O "ffmpeg-${FFMPEG_VERSION}.tar.xz" "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
+        wget --progress=dot:giga -O "ffmpeg-${FFMPEG_VERSION}.tar.xz" "https://ffmpeg.org/releases/ffmpeg-${FFMPEG_VERSION}.tar.xz"
         tar xJf "ffmpeg-${FFMPEG_VERSION}.tar.xz"
         rm -f "ffmpeg-${FFMPEG_VERSION}.tar.xz"
     fi
