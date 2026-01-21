@@ -16,10 +16,12 @@ cache/
 settings.json
 *.pem
 
-# Tools (not needed in container, except install-ffmpeg.sh and patches)
+# Tools (not needed in container, except specific scripts)
 tools/
 !tools/install-ffmpeg.sh
 !tools/patches/
+!tools/install-ai_upscale.sh
+!tools/export-tensorrt.py
 
 # Tests
 *_test.py
