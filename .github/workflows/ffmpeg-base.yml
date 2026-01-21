@@ -29,7 +29,15 @@ jobs:
       packages: write
     strategy:
       matrix:
-        cuda: ['12-5', '12-6', '12-9', '13-1']
+        include:
+          - cuda: '12-4'
+            base_image: 'ubuntu:22.04'
+          - cuda: '12-6'
+            base_image: 'ubuntu:24.04'
+          - cuda: '12-8'
+            base_image: 'ubuntu:24.04'
+          - cuda: '13-0'
+            base_image: 'ubuntu:24.04'
 
     steps:
       - uses: actions/checkout@v4
@@ -68,7 +76,7 @@ jobs:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=cuda${{ matrix.cuda }}
-            type=raw,value=latest,enable=${{ matrix.cuda == '13-1' }}
+            type=raw,value=latest,enable=${{ matrix.cuda == '13-0' }}
             type=raw,value=${{ steps.date.outputs.date }}-cuda${{ matrix.cuda }},enable=${{ steps.version.outputs.version == 'snapshot' }}
 
       - name: Build and push
@@ -83,6 +91,7 @@ jobs:
             BUILD_DATE=${{ steps.date.outputs.datetime }}
             FFMPEG_VERSION=${{ steps.version.outputs.version }}
             CUDA_VERSION=${{ matrix.cuda }}
+            FFMPEG_BASE_IMAGE=${{ matrix.base_image }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-cuda${{ matrix.cuda }}-v3
           cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-cuda${{ matrix.cuda }}-v3,mode=max
 
