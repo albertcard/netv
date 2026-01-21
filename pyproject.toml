@@ -4,7 +4,7 @@ version = "0.1.0"
 description = "Minimal self-hosted IPTV web interface with EPG guide, VOD, and Chromecast"
 readme = "README.md"
 license = "Apache-2.0"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 authors = [
     { name = "Joshua V. Dillon" },
 ]
@@ -17,6 +17,7 @@ classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Operating System :: POSIX :: Linux",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Topic :: Multimedia :: Video :: Display",
