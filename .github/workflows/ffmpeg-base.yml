@@ -30,13 +30,13 @@ jobs:
     strategy:
       matrix:
         include:
-          - cuda: '12-4'
+          - nvidia: 'cuda:12.4'
             base_image: 'ubuntu:22.04'
-          - cuda: '12-6'
+          - nvidia: 'cuda:12.6'
             base_image: 'ubuntu:24.04'
-          - cuda: '12-8'
+          - nvidia: 'cuda:12.8'
             base_image: 'ubuntu:24.04'
-          - cuda: '13-0'
+          - nvidia: 'cuda:13.0'
             base_image: 'ubuntu:24.04'
 
     steps:
@@ -51,6 +51,14 @@ jobs:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Parse CUDA version
+        id: cuda
+        run: |
+          # Extract "12.4" from "cuda:12.4"
+          CUDA_VER="${{ matrix.nvidia }}"
+          CUDA_VER="${CUDA_VER#cuda:}"
+          echo "version=$CUDA_VER" >> $GITHUB_OUTPUT
 
       - name: Generate build date
         id: date
@@ -75,9 +83,9 @@ jobs:
         with:
           images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
           tags: |
-            type=raw,value=cuda${{ matrix.cuda }}
-            type=raw,value=latest,enable=${{ matrix.cuda == '13-0' }}
-            type=raw,value=${{ steps.date.outputs.date }}-cuda${{ matrix.cuda }},enable=${{ steps.version.outputs.version == 'snapshot' }}
+            type=raw,value=cuda${{ steps.cuda.outputs.version }}
+            type=raw,value=latest,enable=${{ steps.cuda.outputs.version == '13.0' }}
+            type=raw,value=${{ steps.date.outputs.date }}-cuda${{ steps.cuda.outputs.version }},enable=${{ steps.version.outputs.version == 'snapshot' }}
 
       - name: Build and push
         uses: docker/build-push-action@v6
@@ -90,11 +98,11 @@ jobs:
           build-args: |
             BUILD_DATE=${{ steps.date.outputs.datetime }}
             FFMPEG_VERSION=${{ steps.version.outputs.version }}
-            CUDA_VERSION=${{ matrix.cuda }}
+            NVIDIA=${{ matrix.nvidia }}
             FFMPEG_BASE_IMAGE=${{ matrix.base_image }}
           no-cache: true
 
       - name: Verify image
         run: |
-          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ matrix.cuda }}
-          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ matrix.cuda }} ffmpeg -version
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ steps.cuda.outputs.version }}
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ steps.cuda.outputs.version }} ffmpeg -version

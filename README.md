@@ -169,18 +169,17 @@ Requires [nvidia-container-toolkit](https://docs.nvidia.com/datacenter/cloud-nat
 Check your driver and compute capability:
 ```bash
 nvidia-smi --query-gpu=driver_version,compute_cap --format=csv,noheader
-# Example: 580.87.02, 8.6 → Driver 580, compute ≥7.5 → use cuda13-1
+# Example: 580.87.02, 8.6 → Driver 580, compute ≥7.5 → use cuda13.0
 ```
 
 Find your CUDA version ([source](https://docs.nvidia.com/cuda/cuda-toolkit-release-notes/index.html)):
 
 | Driver | < 7.5 (Maxwell/Pascal/Volta) | ≥ 7.5 (Turing+) |
 |--------|------------------------------|-----------------|
-| 555 | cuda12-5 | cuda12-5 |
-| 560 | cuda12-6 | cuda12-6 |
-| 570 | cuda12-9 | cuda12-9 |
-| 580 | cuda12-9 | cuda13-1 |
-| 590 | *unsupported* | cuda13-1 |
+| 550 | cuda12.4 | cuda12.4 |
+| 560 | cuda12.6 | cuda12.6 |
+| 570 | cuda12.8 | cuda12.8 |
+| 580+ | cuda12.8 | cuda13.0 |
 
 Then run:
 ```bash

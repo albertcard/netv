@@ -215,8 +215,10 @@ ensure_meson_min_version() {
 # NVIDIA CUDA setup (only used if ENABLE_NVIDIA_CUDA=1)
 # CUDA_VERSION options:
 #   "auto"    - (default) use installed CUDA if available, else install latest
-#   "12-9"    - explicit version (e.g., 12-9, 12-6, 13-0)
+#   "12.8"    - explicit version (e.g., 12.4, 12.6, 13.0) - dots converted to dashes internally
 CUDA_VERSION=${CUDA_VERSION:-auto}
+# Normalize: convert "12.4" to "12-4" for apt package names
+CUDA_VERSION="${CUDA_VERSION//./-}"
 # NVCC_GENCODE options:
 #   "native"  - (default) compile for build machine's GPU via nvidia-smi
 #   "minimum" - lowest arch for CUDA version (sm_52 for <13, sm_75 for 13+)
@@ -461,8 +463,8 @@ extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  rsqrt
     fi
 
     # Pin nv-codec-headers for specific builds:
-    # - netv-ffmpeg:cuda12.4 OR CUDA_VERSION=12-4 -> use NVENC API 12.2 headers (sdk/12.2)
-    # - otherwise                                -> use upstream master
+    # - netv-ffmpeg:cuda12.4 OR CUDA_VERSION=12.4 -> use NVENC API 12.2 headers (sdk/12.2)
+    # - otherwise                                 -> use upstream master
     NV_CODEC_REF="master"
     if [ "${FFMPEG_IMAGE:-}" = "netv-ffmpeg:cuda12.4" ] || [ "${CUDA_VERSION:-}" = "12-4" ]; then
         NV_CODEC_REF="sdk/12.2"

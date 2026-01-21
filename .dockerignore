@@ -16,9 +16,10 @@ cache/
 settings.json
 *.pem
 
-# Tools (not needed in container, except install-ffmpeg.sh)
+# Tools (not needed in container, except install-ffmpeg.sh and patches)
 tools/
 !tools/install-ffmpeg.sh
+!tools/patches/
 
 # Tests
 *_test.py
