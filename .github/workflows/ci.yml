@@ -4,11 +4,15 @@ on:
   workflow_dispatch:  # Manual trigger
   push:
     branches: [main]
-    paths-ignore:
-      # Don't trigger on ffmpeg changes - workflow_run will handle that
-      - "Dockerfile.ffmpeg"
-      - "tools/install-ffmpeg.sh"
-      - ".github/workflows/ffmpeg-base.yml"
+    paths:
+      # Only trigger on files used by main Dockerfile
+      - "Dockerfile"
+      - "*.py"
+      - "pyproject.toml"
+      - "templates/**"
+      - "static/**"
+      - "entrypoint.sh"
+      - ".github/workflows/ci.yml"
   pull_request:
     branches: [main]
   workflow_run:

@@ -1,0 +1,78 @@
+name: AI Upscale Image
+
+on:
+  workflow_dispatch:  # Manual trigger
+  push:
+    branches: [main]
+    paths:
+      - "Dockerfile.ai_upscale"
+      - "entrypoint-ai_upscale.sh"
+      - "tools/install-ai_upscale.sh"
+      - ".github/workflows/ai-upscale.yml"
+  workflow_run:
+    # Trigger after ffmpeg-base completes to pick up new ffmpeg image
+    workflows: ["FFmpeg Base Image"]
+    types: [completed]
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}-ai
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    # Skip if triggered by failed ffmpeg workflow
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        include:
+          - cuda: "12.4"
+          - cuda: "12.6"
+          - cuda: "12.8"
+          - cuda: "13.0"
+            latest: true
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=cuda${{ matrix.cuda }}
+            type=raw,value=latest,enable=${{ matrix.latest == true }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: Dockerfile.ai_upscale
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            FFMPEG_IMAGE=ghcr.io/${{ github.repository }}-ffmpeg:cuda${{ matrix.cuda }}
+          no-cache: true
+
+      - name: Verify image
+        run: |
+          docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ matrix.cuda }}
+          docker run --rm ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ matrix.cuda }} ffmpeg -version || echo "Skipped (NVIDIA libs not available)"

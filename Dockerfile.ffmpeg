@@ -84,7 +84,6 @@ COPY tools/patches /tmp/patches
 
 # Run the build script
 # Extract CUDA version from NVIDIA arg (e.g., "cuda:13.0" -> "13.0")
-# Note: CUDA 12.4 builds skip TensorRT to avoid version mismatch
 # Note: echo BUILD_ARGS forces cache invalidation when any build arg changes
 RUN echo "BUILD_ARGS: NVIDIA=${NVIDIA} FFMPEG_VERSION=${FFMPEG_VERSION} NVCC_GENCODE=${NVCC_GENCODE} \
     ENABLE_NVIDIA_CUDA=${ENABLE_NVIDIA_CUDA} ENABLE_AMD_AMF=${ENABLE_AMD_AMF} ENABLE_TENSORRT=${ENABLE_TENSORRT} \
@@ -95,10 +94,6 @@ RUN echo "BUILD_ARGS: NVIDIA=${NVIDIA} FFMPEG_VERSION=${FFMPEG_VERSION} NVCC_GEN
     chmod +x /tmp/install-ffmpeg.sh && \
     CUDA_VERSION="${NVIDIA#cuda:}" && \
     export CUDA_VERSION && \
-    if [ "$CUDA_VERSION" = "12.4" ]; then \
-        echo "CUDA 12.4 detected: disabling TensorRT"; \
-        export ENABLE_TENSORRT=0; \
-    fi; \
     /tmp/install-ffmpeg.sh
 
 # =============================================================================
