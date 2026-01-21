@@ -92,8 +92,8 @@ jobs:
             FFMPEG_VERSION=${{ steps.version.outputs.version }}
             CUDA_VERSION=${{ matrix.cuda }}
             FFMPEG_BASE_IMAGE=${{ matrix.base_image }}
-          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-cuda${{ matrix.cuda }}-v3
-          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-cuda${{ matrix.cuda }}-v3,mode=max
+          cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-cuda${{ matrix.cuda }}-v4
+          cache-to: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:buildcache-cuda${{ matrix.cuda }}-v4,mode=max
 
       - name: Verify image
         run: |
