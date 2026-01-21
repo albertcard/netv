@@ -120,6 +120,16 @@ LABEL org.opencontainers.image.version="${FFMPEG_VERSION}"
 
 ENV DEBIAN_FRONTEND=noninteractive
 
+# Add Intel graphics PPA for newer Xe driver support (Ubuntu 24.04+ only)
+RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
+    --mount=type=cache,target=/var/lib/apt,sharing=locked \
+    . /etc/os-release && \
+    if [ "$VERSION_CODENAME" != "jammy" ]; then \
+        apt-get update && apt-get install -y --no-install-recommends software-properties-common && \
+        add-apt-repository -y ppa:kobuk-team/intel-graphics && \
+        apt-get update; \
+    fi
+
 # Runtime libraries for FFmpeg
 # Note: x265, libaom, libwebp, libvpl, libdav1d are statically linked when built from source
 RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
@@ -172,11 +182,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     libxext6 \
     # Hardware accel:
     # - NVENC/CUDA: provided by nvidia-container-toolkit from host (no pkg needed)
-    # - VAAPI: intel-media-va-driver (Intel), mesa-va-drivers (AMD), libva from source (below)
+    # - VAAPI: intel-media-va-driver-non-free (Intel), mesa-va-drivers (AMD), libva from source (below)
     # - OpenCL: ocl-icd-libopencl1 (ICD loader), backend from host (NVIDIA) or mesa-opencl-icd (AMD)
     # - Vulkan: libvulkan1 (conditional below), driver from host
     libvdpau1 \
-    intel-media-va-driver \
+    intel-media-va-driver-non-free \
     mesa-va-drivers \
     ocl-icd-libopencl1 \
     # Other deps
@@ -211,9 +221,11 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     [ "$BUILD_LIBX264" != "1" ] && APT_PKGS="$APT_PKGS libx264-164" ; \
     if [ -n "$APT_PKGS" ]; then apt-get update && apt-get install -y --no-install-recommends $APT_PKGS; fi
 
-# Tell libva where to find system drivers (intel-media-va-driver, mesa-va-drivers)
+# Tell libva where to find system drivers and which driver to use
 # Our libva is built with prefix=/opt/ffmpeg_build but drivers are system-installed
+# LIBVA_DRIVER_NAME=iHD forces Intel iHD driver (supports Xe kernel driver, Gen8+)
 ENV LIBVA_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
+ENV LIBVA_DRIVER_NAME=iHD
 
 # Copy FFmpeg binaries from builder
 COPY --from=builder /opt/bin/ffmpeg /usr/local/bin/
