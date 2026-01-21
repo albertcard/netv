@@ -35,7 +35,8 @@ COPY static/ static/
 COPY tools/ tools/
 
 # Install Python dependencies (app + ai_upscale group)
-RUN pip install --no-cache-dir --break-system-packages . torch onnx tensorrt
+RUN pip install --no-cache-dir --break-system-packages . torch onnx tensorrt && \
+    python3 -c "import torch; import onnx; import tensorrt; print('AI packages verified')"
 
 # Runtime config
 EXPOSE 8000

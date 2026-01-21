@@ -80,6 +80,15 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Verify base image exists
+        run: |
+          if ! docker manifest inspect ${{ env.FFMPEG_IMAGE }} > /dev/null 2>&1; then
+            echo "ERROR: Base image ${{ env.FFMPEG_IMAGE }} not found"
+            echo "Run the 'FFmpeg Base Image' workflow first"
+            exit 1
+          fi
+          echo "Base image verified: ${{ env.FFMPEG_IMAGE }}"
+
       - name: Extract metadata
         id: meta
         uses: docker/metadata-action@v5

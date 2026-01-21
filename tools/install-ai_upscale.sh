@@ -120,10 +120,24 @@ for res in $RESOLUTIONS; do
         echo "  ${res}p: already exists, skipping"
     else
         echo "  ${res}p: building..."
-        $PYTHON "$SCRIPT_DIR/export-tensorrt.py" \
+        # Capture output to show errors if build fails
+        OUTPUT=$($PYTHON "$SCRIPT_DIR/export-tensorrt.py" \
             --model "$MODEL" \
             --min-height $res --opt-height $res --max-height $res \
-            -o "$engine" 2>&1 | grep -E "^(Downloading|Using cached|Loading|Using ONNX|Engine saved|  )"
+            -o "$engine" 2>&1) || {
+            echo "ERROR building ${res}p engine:"
+            echo "$OUTPUT"
+            exit 1
+        }
+        # Show filtered progress on success
+        echo "$OUTPUT" | grep -E "^(Downloading|Using cached|Loading|Using ONNX|Engine saved|  )" || true
+        # Verify engine was created
+        if [ ! -f "$engine" ]; then
+            echo "ERROR: Engine file not created: $engine"
+            echo "Build output:"
+            echo "$OUTPUT"
+            exit 1
+        fi
     fi
 done
 

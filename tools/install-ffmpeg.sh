@@ -178,13 +178,9 @@ SVTAV1_GIT_REF=${SVTAV1_GIT_REF:-}
 # FFmpeg version: "snapshot" for latest git, or specific version like "7.1"
 FFMPEG_VERSION=${FFMPEG_VERSION:-snapshot}
 
-# Pin FFmpeg to 7.x on Ubuntu 22.04 (jammy) unless explicitly overridden.
-if [ "$FFMPEG_VERSION" = "snapshot" ] && [ -f /etc/os-release ]; then
-    . /etc/os-release
-    if [ "$VERSION_CODENAME" = "jammy" ]; then
-        FFMPEG_VERSION="7.0"
-    fi
-fi
+# Note: Ubuntu 22.04 (jammy) used to pin FFmpeg 7.0 due to compatibility concerns,
+# but we now build all dependencies from source, so snapshot should work fine.
+# Keep libplacebo pinned for jammy (newer versions need deps jammy lacks).
 
 # Skip apt dependency installation (use if deps already installed, avoids sudo)
 SKIP_DEPS=${SKIP_DEPS:-0}
@@ -235,21 +231,11 @@ NPROC=$(nproc)
 
 mkdir -p "$SRC_DIR" "$BUILD_DIR" "$BIN_DIR" "$LIB_DIR"
 
-# Default libplacebo ref for older distros (jammy tends to lack newer deps).
-if [ -z "$LIBPLACEBO_GIT_REF" ] && [ -f /etc/os-release ]; then
-    . /etc/os-release
-    if [ "$VERSION_CODENAME" = "jammy" ]; then
-        LIBPLACEBO_GIT_REF="v7.349.0"
-    fi
-fi
+# Note: libplacebo pin was previously needed for jammy because older versions
+# lacked dependencies. Now using latest which is compatible with FFmpeg snapshot API.
 
-# Default SVT-AV1 ref for jammy when building FFmpeg 7.x.
-if [ -z "$SVTAV1_GIT_REF" ] && [ -f /etc/os-release ]; then
-    . /etc/os-release
-    if [ "$VERSION_CODENAME" = "jammy" ] && [ "$FFMPEG_VERSION" = "7.0" ]; then
-        SVTAV1_GIT_REF="v2.1.2"
-    fi
-fi
+# Note: SVT-AV1 pin was previously needed for FFmpeg 7.0 API compatibility on jammy.
+# With FFmpeg snapshot, we use latest SVT-AV1 (no pin needed).
 
 # Base packages (installed first, includes wget needed for CUDA repo setup)
 APT_PACKAGES=(
@@ -999,8 +985,20 @@ if [ "$ENABLE_TENSORRT" = "1" ]; then
     # Patch dnn_interface.h to add DNN_TRT enum and TRTOptions
     DNN_INTERFACE_H="$FFMPEG_DIR/libavfilter/dnn_interface.h"
     if [ -f "$DNN_INTERFACE_H" ] && ! grep -q "DNN_TRT" "$DNN_INTERFACE_H"; then
-        # Add DNN_TRT to enum
-        sed -i 's/DNN_TH = 1 << 2$/DNN_TH = 1 << 2,\n    DNN_TRT = 1 << 3/' "$DNN_INTERFACE_H"
+        # FFmpeg 7.0 has single-line enum: {DNN_TF = 1, DNN_OV, DNN_TH}
+        # FFmpeg 7.1+/snapshot has multi-line: DNN_TH = 1 << 2
+        if grep -q "DNN_TH = 1 << 2" "$DNN_INTERFACE_H"; then
+            # Multi-line format (7.1+/snapshot)
+            sed -i '/DNN_TH = 1 << 2/s/$/,/' "$DNN_INTERFACE_H"
+            sed -i '/DNN_TH = 1 << 2,$/a\    DNN_TRT = 1 << 3' "$DNN_INTERFACE_H"
+        elif grep -q "DNN_TF = 1, DNN_OV, DNN_TH}" "$DNN_INTERFACE_H"; then
+            # Single-line format (7.0)
+            sed -i 's/DNN_TF = 1, DNN_OV, DNN_TH}/DNN_TF = 1, DNN_OV, DNN_TH, DNN_TRT}/' "$DNN_INTERFACE_H"
+        else
+            echo "ERROR: Unknown DNNBackendType enum format in dnn_interface.h" >&2
+            grep -A5 "DNNBackendType" "$DNN_INTERFACE_H" >&2
+            exit 1
+        fi
         # Add TRTOptions struct after THOptions
         sed -i '/^} THOptions;$/a\
 \
@@ -1015,7 +1013,13 @@ typedef struct TRTOptions {\
     TRTOptions trt_option;\
 #endif
         }' "$DNN_INTERFACE_H"
-        echo "Patched dnn_interface.h"
+        # Verify patch was applied
+        if grep -q "DNN_TRT" "$DNN_INTERFACE_H"; then
+            echo "Patched dnn_interface.h"
+        else
+            echo "ERROR: Failed to patch dnn_interface.h - DNN_TRT not found after patching" >&2
+            exit 1
+        fi
     fi
 
     # Patch dnn_interface.c to register TensorRT backend

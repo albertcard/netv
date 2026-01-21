@@ -1,4 +1,5 @@
 #!/bin/sh
+set -e
 # Entrypoint: fix permissions and drop to netv user
 #
 # Handles two common Docker issues:
@@ -17,13 +18,24 @@ if ! gosu netv sh -c "touch /app/cache/.perm_test && rm /app/cache/.perm_test" 2
     chmod -R u+rwX,g+rwX /app/cache 2>/dev/null || true
     chmod g+s /app/cache 2>/dev/null || true
 fi
+# Final verification - warn if still not writable
+if ! gosu netv sh -c "touch /app/cache/.perm_test && rm /app/cache/.perm_test" 2>/dev/null; then
+    echo "WARNING: /app/cache is not writable by netv user"
+    echo "Cache operations may fail. Check volume permissions."
+fi
 mkdir -p /app/cache/users
 
 # Add netv user to render device group (for VAAPI hardware encoding)
 if [ -e /dev/dri/renderD128 ]; then
     RENDER_GID=$(stat -c '%g' /dev/dri/renderD128)
-    groupadd --gid "$RENDER_GID" hostrender 2>/dev/null || true
-    usermod -aG hostrender netv 2>/dev/null || true
+    if ! groupadd --gid "$RENDER_GID" hostrender 2>/dev/null; then
+        # Group may already exist with different name, that's OK
+        :
+    fi
+    if ! usermod -aG hostrender netv 2>/dev/null; then
+        echo "WARNING: Could not add netv to render group (GID $RENDER_GID)"
+        echo "VAAPI hardware encoding may not be available"
+    fi
 fi
 
 # Drop to netv user and run the app
