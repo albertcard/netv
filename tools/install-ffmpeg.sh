@@ -293,7 +293,7 @@ APT_PACKAGES=(
 [ "$BUILD_LIBVA" != "1" ] && APT_PACKAGES+=(libva-dev)
 [ "$BUILD_LIBJXL" != "1" ] && APT_PACKAGES+=(libjxl-dev)
 [ "$BUILD_LIBX264" != "1" ] && APT_PACKAGES+=(libx264-dev)
-# Note: TensorRT packages (libnvinfer-dev) installed later after CUDA repo is set up
+# Note: TensorRT headers (libnvinfer-headers-dev) installed later after CUDA repo is set up
 if [ "$SKIP_DEPS" != "1" ]; then
     sudo apt-get update && sudo apt-get install -y "${APT_PACKAGES[@]}"
     ensure_meson_min_version 0.63
@@ -343,9 +343,10 @@ if [ "$ENABLE_NVIDIA_CUDA" = "1" ]; then
         # Install CUDA packages
         sudo apt-get install -y libffmpeg-nvenc-dev cuda-nvcc-$CUDA_VERSION cuda-cudart-dev-$CUDA_VERSION
 
-        # Install TensorRT packages (requires NVIDIA repo set up above)
+        # Install TensorRT headers only (requires NVIDIA repo set up above)
+        # We only need headers for compilation - libnvinfer is loaded via dlopen at runtime
         if [ "$ENABLE_TENSORRT" = "1" ]; then
-            sudo apt-get install -y libnvinfer-dev libnvinfer-headers-dev libnvinfer-plugin-dev
+            sudo apt-get install -y libnvinfer-headers-dev
         fi
     fi
     echo "Using CUDA version: $CUDA_VERSION"
@@ -1054,11 +1055,9 @@ typedef struct TRTOptions {\
         sed -i 's/dnn_deps_any="libtensorflow libopenvino libtorch"/dnn_deps_any="libtensorflow libopenvino libtorch libtensorrt"/' "$CONFIGURE"
         # Add header check (after libtorch check)
         # TensorRT (libnvinfer) is loaded via dlopen at runtime - don't link against it
-        # CUDA (libcudart) is still linked because the CUDA kernels require it
-        # Link against -ldl for dlopen/dlsym
+        # CUDA (libcudart) is linked via --extra-libs in configure command
         sed -i '/enabled libtorch.*require_cxx libtorch/a\
-enabled libtensorrt       \&\& check_cxxflags -std=c++17 \&\& check_header NvInfer.h \&\& check_header cuda_runtime.h \&\&\
-                             add_extralibs -lcudart -ldl -lstdc++' "$CONFIGURE"
+enabled libtensorrt       && check_cxxflags -std=c++17 && check_header NvInfer.h' "$CONFIGURE"
         echo "Patched configure (TensorRT via dlopen, CUDA linked for kernels)"
     fi
 
@@ -1090,10 +1089,13 @@ if [ "$ENABLE_LIBTORCH" = "1" ]; then
     fi
     EXTRA_LDFLAGS="$EXTRA_LDFLAGS -L$LIB_DIR -Wl,-rpath,$LIB_DIR"
 fi
+TENSORRT_EXTRA_LIBS=""
 if [ "$ENABLE_TENSORRT" = "1" ]; then
     # TensorRT needs C++ flags with CUDA headers (uses require_cxx for detection)
+    # Also need to link cudart for CUDA kernels (TensorRT itself is dlopen'd)
     if [ "$ENABLE_NVIDIA_CUDA" = "1" ]; then
         EXTRA_CXXFLAGS="$EXTRA_CXXFLAGS -I$CUDA_PATH/include"
+        TENSORRT_EXTRA_LIBS="-lcudart"
     fi
 fi
 CONFIGURE_CMD=(
@@ -1103,7 +1105,7 @@ CONFIGURE_CMD=(
     --extra-cflags="$EXTRA_CFLAGS"
     --extra-cxxflags="$EXTRA_CXXFLAGS"
     --extra-ldflags="$EXTRA_LDFLAGS"
-    --extra-libs="-lpthread -lm -ldl${TORCH_EXTRA_LIBS:+ $TORCH_EXTRA_LIBS}"
+    --extra-libs="-lpthread -lm -ldl${TORCH_EXTRA_LIBS:+ $TORCH_EXTRA_LIBS}${TENSORRT_EXTRA_LIBS:+ $TENSORRT_EXTRA_LIBS}"
     --ld="g++"
     --bindir="$BIN_DIR"
     --disable-debug
