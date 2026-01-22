@@ -20,29 +20,44 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Install dependencies
 # - If using apt ffmpeg (ubuntu base): install ffmpeg + python
 # - If using compiled ffmpeg (netv-ffmpeg base): ffmpeg already present, just install python
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    gosu \
-    python3 \
-    python3-pip \
-    $(if [ ! -f /usr/local/bin/ffmpeg ]; then echo "ffmpeg"; fi) \
-    && rm -rf /var/lib/apt/lists/*
+# Note: The conditional must be evaluated in shell, not in Dockerfile syntax
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        gosu \
+        python3 \
+        python3-pip && \
+    # Conditionally install ffmpeg if not present from base image
+    if [ ! -x /usr/local/bin/ffmpeg ] && [ ! -x /usr/bin/ffmpeg ]; then \
+        apt-get install -y --no-install-recommends ffmpeg; \
+    fi && \
+    rm -rf /var/lib/apt/lists/*
 
 # App setup
 WORKDIR /app
+
+# Copy application files with verification
 COPY pyproject.toml README.md ./
 COPY *.py ./
 COPY templates/ templates/
 COPY static/ static/
 
+# Verify critical files exist
+RUN test -f pyproject.toml || { echo "ERROR: pyproject.toml not found"; exit 1; }
+
 # Install Python dependencies
 # --ignore-installed: avoids "Cannot uninstall X, RECORD file not found" for apt packages
 # --break-system-packages: required for PEP 668 (Ubuntu 24.04+), doesn't exist in pip 22.0 (Ubuntu 22.04)
-RUN PIP_BSP=$(pip install --help 2>&1 | grep -q break-system-packages && echo --break-system-packages); \
-    python3 -m pip install --no-cache-dir --ignore-installed $PIP_BSP .
+# Using try-fallback approach for maximum compatibility
+RUN if python3 -m pip install --help 2>&1 | grep -q -- '--break-system-packages'; then \
+        python3 -m pip install --no-cache-dir --ignore-installed --break-system-packages .; \
+    else \
+        python3 -m pip install --no-cache-dir --ignore-installed .; \
+    fi
 
 # Runtime config
 EXPOSE 8000
 
+# Environment variables (see README for details)
 ENV NETV_PORT=8000
 ENV NETV_HTTPS=""
 ENV LOG_LEVEL=INFO
@@ -50,12 +65,14 @@ ENV LOG_LEVEL=INFO
 # Create non-root user (entrypoint handles permissions and group membership)
 RUN useradd -m netv
 
-# Copy entrypoint and set permissions
+# Copy entrypoint and set permissions with validation
 COPY entrypoint.sh /app/
-RUN chmod +x /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh && \
+    test -x /app/entrypoint.sh || { echo "ERROR: entrypoint.sh not executable"; exit 1; }
 
-# Healthcheck (internal port is always 8000)
+# Healthcheck with improved error handling
+# Note: start-period allows time for application startup
 HEALTHCHECK --interval=30s --timeout=10s --start-period=10s --retries=3 \
-    CMD python3 -c "import urllib.request; urllib.request.urlopen('http://localhost:8000/', timeout=5)" || exit 1
+    CMD python3 -c "import urllib.request; r=urllib.request.urlopen('http://localhost:8000/', timeout=5); exit(0 if r.status==200 else 1)" 2>/dev/null || exit 1
 
 ENTRYPOINT ["/app/entrypoint.sh"]

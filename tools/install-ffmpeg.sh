@@ -7,8 +7,17 @@ set -e
 # Noninteractive apt installs (prevents prompts)
 export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
 
-# Capture script directory before any cd commands
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# Capture script directory before any cd commands (with error handling)
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)" || {
+    echo "ERROR: Failed to determine script directory" >&2
+    exit 1
+}
+
+# Validate SCRIPT_DIR is not empty and exists
+if [ -z "$SCRIPT_DIR" ] || [ ! -d "$SCRIPT_DIR" ]; then
+    echo "ERROR: Invalid script directory: $SCRIPT_DIR" >&2
+    exit 1
+fi
 
 # =============================================================================
 # Helper Functions
@@ -71,13 +80,23 @@ git_update_or_clone() {
     local ref="${4:-}"
 
     if [ -d "$dir/.git" ]; then
-        if ! git -C "$dir" pull; then
-            log_warn "Git pull failed for $dir, re-cloning..."
-            rm -rf "$dir"
+        # Check for conflicts or errors during pull
+        local pull_output
+        if ! pull_output=$(git -C "$dir" pull 2>&1); then
+            log_warn "Git pull failed for $dir: $pull_output"
+            log_warn "Re-cloning..."
+            safe_rm_rf "$dir" 2 || rm -rf "$dir"
+            git_clone_validated "$url" "$dir" "$depth" "$ref"
+        elif echo "$pull_output" | grep -qE "CONFLICT|fatal"; then
+            log_warn "Git pull had conflicts for $dir, re-cloning..."
+            safe_rm_rf "$dir" 2 || rm -rf "$dir"
             git_clone_validated "$url" "$dir" "$depth" "$ref"
         fi
     else
-        rm -rf "$dir"  # Remove if exists but not a git repo
+        # Remove if exists but not a git repo
+        if [ -e "$dir" ]; then
+            safe_rm_rf "$dir" 2 || rm -rf "$dir"
+        fi
         git_clone_validated "$url" "$dir" "$depth" "$ref"
     fi
 }
@@ -96,6 +115,107 @@ get_ubuntu_version() {
     fi
     # Remove dots: "24.04" -> "2404"
     echo "$version_id" | tr -d '.'
+}
+
+# Safe rm -rf: validates path before deletion to prevent catastrophic mistakes
+safe_rm_rf() {
+    local path="$1"
+    local min_depth="${2:-2}"  # Minimum path depth (default: 2 components)
+
+    # Never delete empty paths
+    if [ -z "$path" ]; then
+        log_error "safe_rm_rf: empty path"
+        return 1
+    fi
+
+    # Never delete root or single-level paths
+    local depth
+    depth=$(echo "$path" | tr -cd '/' | wc -c)
+    if [ "$depth" -lt "$min_depth" ]; then
+        log_error "safe_rm_rf: path '$path' too shallow (depth $depth < $min_depth)"
+        return 1
+    fi
+
+    # Never delete common dangerous paths
+    case "$path" in
+        /|/bin|/boot|/dev|/etc|/home|/lib|/lib64|/media|/mnt|/opt|/proc|/root|/run|/sbin|/srv|/sys|/tmp|/usr|/var)
+            log_error "safe_rm_rf: refusing to delete system path: $path"
+            return 1
+            ;;
+    esac
+
+    # Path must exist to delete
+    if [ ! -e "$path" ]; then
+        return 0  # Nothing to delete
+    fi
+
+    rm -rf "$path"
+}
+
+# Validate CUDA version format (e.g., "12.4", "13.0")
+validate_cuda_version() {
+    local version="$1"
+    if ! [[ "$version" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        log_error "Invalid CUDA version format: '$version' (expected X.Y)"
+        return 1
+    fi
+    return 0
+}
+
+# Validate torch variant format (e.g., "cu124", "cu130", "cpu")
+validate_torch_variant() {
+    local variant="$1"
+    if ! [[ "$variant" =~ ^(cu[0-9]+|rocm[0-9]+\.[0-9]+|cpu)$ ]]; then
+        log_error "Invalid TORCH_VARIANT: '$variant' (expected cuXXX, rocmX.Y, or cpu)"
+        return 1
+    fi
+    return 0
+}
+
+# Verify SHA256 checksum of a file
+verify_sha256() {
+    local file="$1"
+    local expected="$2"
+
+    if [ ! -f "$file" ]; then
+        log_error "File not found for checksum verification: $file"
+        return 1
+    fi
+
+    local actual
+    actual=$(sha256sum "$file" | awk '{print $1}')
+
+    if [ "$actual" != "$expected" ]; then
+        log_error "SHA256 checksum mismatch for $file"
+        log_error "  Expected: $expected"
+        log_error "  Actual:   $actual"
+        return 1
+    fi
+
+    log_info "SHA256 verified: $file"
+    return 0
+}
+
+# Download file with optional checksum verification
+download_file() {
+    local url="$1"
+    local output="$2"
+    local sha256="${3:-}"  # Optional checksum
+
+    log_info "Downloading: $url"
+    if ! wget -q -O "$output" "$url"; then
+        log_error "Failed to download: $url"
+        return 1
+    fi
+
+    if [ -n "$sha256" ]; then
+        if ! verify_sha256 "$output" "$sha256"; then
+            rm -f "$output"
+            return 1
+        fi
+    fi
+
+    return 0
 }
 
 # =============================================================================
@@ -296,6 +416,13 @@ ensure_meson_min_version() {
 #   "auto"    - (default) use installed CUDA if available, else install latest
 #   "12.8"    - explicit version (e.g., 12.4, 12.6, 13.0) - dots converted to dashes internally
 CUDA_VERSION=${CUDA_VERSION:-auto}
+# Validate CUDA_VERSION format before normalization
+if [ "$CUDA_VERSION" != "auto" ]; then
+    if ! validate_cuda_version "$CUDA_VERSION"; then
+        log_error "Set CUDA_VERSION to 'auto' or a valid version like '12.8' or '13.0'"
+        exit 1
+    fi
+fi
 # Normalize: convert "12.4" to "12-4" for apt package names
 CUDA_VERSION="${CUDA_VERSION//./-}"
 # NVCC_GENCODE options:
@@ -310,18 +437,28 @@ BUILD_DIR="${BUILD_DIR:-$HOME/ffmpeg_build}"    # Build artifacts cache (can be 
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"          # Final binary install location
 LIB_DIR="${LIB_DIR:-$HOME/.local/lib}"          # Final shared library install location (for libva)
 
-# Get number of processors with fallback
+# Get number of processors with fallback and validation
 NPROC=$(nproc 2>/dev/null || echo 4)
-[ "$NPROC" -lt 1 ] 2>/dev/null && NPROC=4
-
-# Ensure HOME is set (for cron/systemd contexts)
-: "${HOME:=$(getent passwd "$(id -un)" | cut -d: -f6)}"
-if [ -z "$HOME" ]; then
-    log_error "HOME environment variable not set and could not be detected"
-    exit 1
+if ! [[ "$NPROC" =~ ^[0-9]+$ ]] || [ "$NPROC" -lt 1 ] || [ "$NPROC" -gt 256 ]; then
+    log_warn "Invalid NPROC value '$NPROC', using 4"
+    NPROC=4
 fi
 
-mkdir -p "$SRC_DIR" "$BUILD_DIR" "$BIN_DIR" "$LIB_DIR"
+# Ensure HOME is set (for cron/systemd contexts)
+if [ -z "$HOME" ]; then
+    HOME=$(getent passwd "$(id -un)" 2>/dev/null | cut -d: -f6) || true
+    if [ -z "$HOME" ] || [ ! -d "$HOME" ]; then
+        log_error "HOME environment variable not set and could not be detected"
+        exit 1
+    fi
+    export HOME
+fi
+
+# Create build directories (with validation)
+mkdir -p "$SRC_DIR" "$BUILD_DIR" "$BIN_DIR" "$LIB_DIR" || {
+    log_error "Failed to create build directories"
+    exit 1
+}
 
 # Note: libplacebo pin was previously needed for jammy because older versions
 # lacked dependencies. Now using latest which is compatible with FFmpeg snapshot API.
@@ -395,7 +532,8 @@ APT_PACKAGES=(
 [ "$BUILD_LIBX264" != "1" ] && APT_PACKAGES+=(libx264-dev)
 # Note: TensorRT headers (libnvinfer-headers-dev) installed later after CUDA repo is set up
 if [ "$SKIP_DEPS" != "1" ]; then
-    sudo apt-get update && sudo apt-get install -y "${APT_PACKAGES[@]}"
+    sudo apt-get update
+    sudo apt-get install -y "${APT_PACKAGES[@]}"
     ensure_meson_min_version 0.63
 fi
 
@@ -552,15 +690,15 @@ extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  rsqrt
     fi
     echo "nv-codec-headers: FFMPEG_IMAGE=${FFMPEG_IMAGE:-unset}, CUDA_VERSION=${CUDA_VERSION:-unset}, ref=$NV_CODEC_REF"
 
-    cd "$SRC_DIR" &&
+    cd "$SRC_DIR"
     if [ -d nv-codec-headers/.git ]; then
-        git -C nv-codec-headers fetch --depth 1 origin "$NV_CODEC_REF" &&
+        git -C nv-codec-headers fetch --depth 1 origin "$NV_CODEC_REF"
         git -C nv-codec-headers checkout -f "$NV_CODEC_REF"
     else
         git clone --depth 1 --branch "$NV_CODEC_REF" https://git.videolan.org/git/ffmpeg/nv-codec-headers.git
-    fi &&
-    cd nv-codec-headers &&
-    make &&
+    fi
+    cd nv-codec-headers
+    make
     make PREFIX="$BUILD_DIR" install
 fi
 
@@ -576,7 +714,8 @@ if [ "$ENABLE_AMD_AMF" = "1" ]; then
         exit 1
     fi
     mkdir -p "$BUILD_DIR/include/AMF"
-    cp -r AMF/amf/public/include/* "$BUILD_DIR/include/AMF/"
+    # Use /. to copy directory contents without glob expansion issues
+    cp -r "AMF/amf/public/include/." "$BUILD_DIR/include/AMF/"
     AMF_FLAGS=(--enable-amf)
     log_info "AMF headers installed for AMD GPU encoding"
 fi
@@ -608,11 +747,11 @@ if [ "$BUILD_LIBX265" = "1" ]; then
     cd x265_git/build/linux
 
     # Clean previous builds
-    rm -rf 8bit 10bit 12bit &&
-    mkdir -p 8bit 10bit 12bit &&
+    rm -rf 8bit 10bit 12bit
+    mkdir -p 8bit 10bit 12bit
 
     # Build 12-bit
-    cd 12bit &&
+    cd 12bit
     PATH="$BIN_DIR:$PATH" cmake -G "Unix Makefiles" \
         -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" \
         -DHIGH_BIT_DEPTH=ON \
@@ -620,24 +759,24 @@ if [ "$BUILD_LIBX265" = "1" ]; then
         -DENABLE_SHARED=OFF \
         -DENABLE_CLI=OFF \
         -DMAIN12=ON \
-        ../../../source &&
-    PATH="$BIN_DIR:$PATH" make -j $NPROC &&
+        ../../../source
+    PATH="$BIN_DIR:$PATH" make -j "$NPROC"
 
     # Build 10-bit
-    cd ../10bit &&
+    cd ../10bit
     PATH="$BIN_DIR:$PATH" cmake -G "Unix Makefiles" \
         -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" \
         -DHIGH_BIT_DEPTH=ON \
         -DEXPORT_C_API=OFF \
         -DENABLE_SHARED=OFF \
         -DENABLE_CLI=OFF \
-        ../../../source &&
-    PATH="$BIN_DIR:$PATH" make -j $NPROC &&
+        ../../../source
+    PATH="$BIN_DIR:$PATH" make -j "$NPROC"
 
     # Build 8-bit (main) and link in 10-bit and 12-bit
-    cd ../8bit &&
-    ln -sf ../10bit/libx265.a libx265_main10.a &&
-    ln -sf ../12bit/libx265.a libx265_main12.a &&
+    cd ../8bit
+    ln -sf ../10bit/libx265.a libx265_main10.a
+    ln -sf ../12bit/libx265.a libx265_main12.a
     PATH="$BIN_DIR:$PATH" cmake -G "Unix Makefiles" \
         -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" \
         -DLIB_INSTALL_DIR="$BUILD_DIR/lib" \
@@ -647,22 +786,22 @@ if [ "$BUILD_LIBX265" = "1" ]; then
         -DEXTRA_LINK_FLAGS="-L." \
         -DLINKED_10BIT=ON \
         -DLINKED_12BIT=ON \
-        ../../../source &&
-    PATH="$BIN_DIR:$PATH" make -j $NPROC &&
+        ../../../source
+    PATH="$BIN_DIR:$PATH" make -j "$NPROC"
     # Merge 8-bit, 10-bit, and 12-bit libraries into one (cmake doesn't do this automatically)
-    mv libx265.a libx265_main.a &&
-    mkdir -p merged/8bit merged/10bit merged/12bit &&
-    (cd merged/8bit && ar x ../../libx265_main.a) &&
-    (cd merged/10bit && ar x ../../libx265_main10.a) &&
-    (cd merged/12bit && ar x ../../libx265_main12.a) &&
-    ar crs libx265.a merged/*/*.o &&
-    rm -rf merged libx265_main.a &&
-    make install &&
+    mv libx265.a libx265_main.a
+    mkdir -p merged/8bit merged/10bit merged/12bit
+    (cd merged/8bit && ar x ../../libx265_main.a)
+    (cd merged/10bit && ar x ../../libx265_main10.a)
+    (cd merged/12bit && ar x ../../libx265_main12.a)
+    ar crs libx265.a merged/*/*.o
+    rm -rf merged libx265_main.a
+    make install
 
     # x265's cmake doesn't reliably install x265.pc, so we create it manually
     # Extract version from x265.h (format: #define X265_BUILD 215)
-    X265_VERSION=$(grep '#define X265_BUILD' "$BUILD_DIR/include/x265.h" | awk '{print $3}') &&
-    mkdir -p "$BUILD_DIR/lib/pkgconfig" &&
+    X265_VERSION=$(grep '#define X265_BUILD' "$BUILD_DIR/include/x265.h" | awk '{print $3}')
+    mkdir -p "$BUILD_DIR/lib/pkgconfig"
     cat > "$BUILD_DIR/lib/pkgconfig/x265.pc" << PCEOF
 prefix=$BUILD_DIR
 exec_prefix=\${prefix}
@@ -706,7 +845,8 @@ if [ "$BUILD_LIBJXL" = "1" ]; then
     cd "$SRC_DIR"
     # libjxl needs --recursive for submodules
     if [ -d libjxl/.git ]; then
-        git -C libjxl pull && git -C libjxl submodule update --init --recursive
+        git -C libjxl pull
+        git -C libjxl submodule update --init --recursive
     else
         rm -rf libjxl
         git clone --depth 1 --recursive https://github.com/libjxl/libjxl.git
@@ -881,6 +1021,11 @@ if [ "$ENABLE_LIBTORCH" = "1" ]; then
     # LIBTORCH_VARIANT: cu124 (default), auto, cpu, cu126, cu128, cu130, rocm6.4
     # PyTorch only releases for even-numbered CUDA versions
     if [ "$LIBTORCH_VARIANT" != "auto" ]; then
+        # Validate user-provided variant
+        if ! validate_torch_variant "$LIBTORCH_VARIANT"; then
+            log_error "Valid variants: cu124, cu126, cu128, cu130, rocm6.4, cpu"
+            exit 1
+        fi
         TORCH_VARIANT="$LIBTORCH_VARIANT"
         echo "LibTorch: using $TORCH_VARIANT (explicit)"
     elif [ "$ENABLE_NVIDIA_CUDA" = "1" ]; then
@@ -906,7 +1051,9 @@ if [ "$ENABLE_LIBTORCH" = "1" ]; then
     if [ ! -f "$LIBTORCH_MARKER" ]; then
         echo "Downloading LibTorch $LIBTORCH_VERSION ($TORCH_VARIANT)..."
         cd "$SRC_DIR"
-        rm -rf libtorch libtorch.zip
+        # Clean up any existing libtorch directory (safe: inside $SRC_DIR)
+        safe_rm_rf "$SRC_DIR/libtorch" 3
+        rm -f libtorch.zip
 
         # Download from pytorch.org
         # cu124 and earlier use cxx11-abi prefix, cu130+ dropped it
@@ -935,7 +1082,14 @@ if [ "$ENABLE_LIBTORCH" = "1" ]; then
 
     # Copy libtorch shared libs to permanent location (LIB_DIR)
     echo "Installing libtorch libs to $LIB_DIR..."
-    cp -a "$LIBTORCH_DIR/lib"/*.so* "$LIB_DIR/" 2>/dev/null || true
+    if ! cp -a "$LIBTORCH_DIR/lib"/*.so* "$LIB_DIR/" 2>/dev/null; then
+        log_warn "Some libtorch libs may not have been copied - check $LIB_DIR"
+    fi
+    # Verify at least libtorch.so was copied
+    if [ ! -f "$LIB_DIR/libtorch.so" ]; then
+        log_error "libtorch.so not found in $LIB_DIR after copy"
+        exit 1
+    fi
 
     # Create pkg-config file for libtorch (FFmpeg configure uses pkg-config for detection)
     mkdir -p "$BUILD_DIR/lib/pkgconfig"
@@ -979,6 +1133,18 @@ if [ ! -d "$FFMPEG_DIR" ]; then
         tar xJf "ffmpeg-${FFMPEG_VERSION}.tar.xz"
         rm -f "ffmpeg-${FFMPEG_VERSION}.tar.xz"
     fi
+fi
+
+# Patch ffmpeg for SVT-AV1 v4.0.0 API compatibility
+# v4.0.0 renamed enable_adaptive_quantization -> aq_mode
+SVTAV1_CODEC="$FFMPEG_DIR/libavcodec/libsvtav1.c"
+SVTAV1_HEADER="$BUILD_DIR/include/svt-av1/EbSvtAv1Enc.h"
+if [ -f "$SVTAV1_CODEC" ] && grep -q "enable_adaptive_quantization" "$SVTAV1_CODEC" && \
+   [ -f "$SVTAV1_HEADER" ] && grep -q "uint8_t aq_mode;" "$SVTAV1_HEADER"; then
+    echo "Patching ffmpeg for SVT-AV1 v4.0.0 (adding compat alias)..."
+    sed -i '/#include <EbSvtAv1ErrorCodes.h>/i\
+/* SVT-AV1 v4.0.0 compat: renamed enable_adaptive_quantization -> aq_mode */\
+#define enable_adaptive_quantization aq_mode' "$SVTAV1_CODEC"
 fi
 
 # Patch ffmpeg's torch backend
@@ -1227,7 +1393,7 @@ enabled libtensorrt       && check_cxxflags -std=c++17 && check_headers NvInfer.
     echo "TensorRT DNN backend patches applied"
 fi
 
-cd "$FFMPEG_DIR" && \
+cd "$FFMPEG_DIR"
 # Build configure flags
 # MARCH=native for CPU-specific optimizations (opt-in, not portable)
 EXTRA_CFLAGS="-I$BUILD_DIR/include -O3${MARCH:+ -march=$MARCH -mtune=$MARCH}"
@@ -1319,9 +1485,9 @@ fi
 BUILD_PATH="$BIN_DIR:$PATH"
 [ "$ENABLE_NVIDIA_CUDA" = "1" ] && BUILD_PATH="$CUDA_PATH/bin:$BUILD_PATH"
 
-PATH="$BUILD_PATH" PKG_CONFIG_PATH="$BUILD_DIR/lib/pkgconfig:$PKG_CONFIG_PATH" "${CONFIGURE_CMD[@]}" && \
-PATH="$BUILD_PATH" make -j $NPROC && \
-make install && \
+PATH="$BUILD_PATH" PKG_CONFIG_PATH="$BUILD_DIR/lib/pkgconfig:$PKG_CONFIG_PATH" "${CONFIGURE_CMD[@]}"
+PATH="$BUILD_PATH" make -j "$NPROC"
+make install
 hash -r
 
 grep -q "$BUILD_DIR/share/man" "$HOME/.manpath" 2>/dev/null || echo "MANPATH_MAP $BIN_DIR $BUILD_DIR/share/man" >> "$HOME/.manpath"

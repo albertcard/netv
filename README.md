@@ -193,8 +193,8 @@ For real-time 4x AI upscaling (720p → 4K at 85fps on RTX 5090):
 ```bash
 git clone https://github.com/jvdillon/netv.git
 cd netv
-docker build -f Dockerfile.ai_upscale -t netv-ai .
-docker run --gpus all -v netv-models:/models -v ./cache:/app/cache -p 8000:8000 netv-ai
+docker build -f Dockerfile.ai_upscale -t netv-ai-upscale .
+docker run --gpus all -v netv-models:/models -v ./cache:/app/cache -p 8000:8000 netv-ai-upscale
 ```
 
 First start builds TensorRT engines for your GPU (~2-3 min). Engines are cached in the

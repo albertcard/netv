@@ -1,5 +1,9 @@
 # FFmpeg Docker image with hardware acceleration (NVENC, VAAPI, QSV, AMF)
 #
+# REQUIREMENTS:
+#   - Docker BuildKit (DOCKER_BUILDKIT=1 or use docker buildx)
+#   - 20GB+ disk space for build
+#
 # Uses install-ffmpeg.sh as single source of truth for build configuration.
 #
 # NVIDIA GPU compatibility:
@@ -258,14 +262,31 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
 
 # Tell libva where to find system drivers and which driver to use
 # Our libva is built with prefix=/opt/ffmpeg_build but drivers are system-installed
-# LIBVA_DRIVER_NAME=iHD forces Intel iHD driver (supports Xe kernel driver, Gen8+)
+# Default LIBVA_DRIVER_NAME=iHD (Intel iHD driver, supports Xe kernel driver, Gen8+)
+# Override at runtime for other GPUs:
+#   - AMD: LIBVA_DRIVER_NAME=radeonsi
+#   - Older Intel: LIBVA_DRIVER_NAME=i965
+#   - Auto-detect: unset LIBVA_DRIVER_NAME (let libva auto-select)
 ENV LIBVA_DRIVERS_PATH=/usr/lib/x86_64-linux-gnu/dri
-ENV LIBVA_DRIVER_NAME=iHD
+# Note: Set to empty to allow auto-detection, or override at container runtime
+ARG LIBVA_DRIVER_NAME_DEFAULT=iHD
+ENV LIBVA_DRIVER_NAME=${LIBVA_DRIVER_NAME_DEFAULT}
 
-# Copy FFmpeg binaries from builder
+# Copy FFmpeg binaries from builder and verify they exist
 COPY --from=builder /opt/bin/ffmpeg /usr/local/bin/
 COPY --from=builder /opt/bin/ffprobe /usr/local/bin/
 COPY --from=builder /opt/bin/ffplay /usr/local/bin/
+
+# Verify FFmpeg binaries are executable and have expected size (not empty)
+RUN for bin in ffmpeg ffprobe ffplay; do \
+        if [ ! -x "/usr/local/bin/$bin" ]; then \
+            echo "ERROR: $bin not executable or not found"; exit 1; \
+        fi; \
+        SIZE=$(stat -c%s "/usr/local/bin/$bin" 2>/dev/null || echo 0); \
+        if [ "$SIZE" -lt 1000000 ]; then \
+            echo "ERROR: $bin seems too small (${SIZE} bytes), may be corrupt"; exit 1; \
+        fi; \
+    done && echo "FFmpeg binaries verified"
 
 # Copy built libva if compiled from source (for Intel Xe kernel driver support)
 # libva needs to be in /opt/lib to match the rpath embedded in ffmpeg binary
@@ -294,11 +315,23 @@ RUN --mount=type=bind,from=builder,source=/src,target=/tmp/src \
     fi
 
 # Verify all dependencies are satisfied (exclude NVIDIA libs - provided at runtime by nvidia-container-toolkit)
-RUN ALL_MISSING=$(ldd /usr/local/bin/ffmpeg | grep "not found" || true) && \
-    echo "=== All 'not found' libraries ===" && echo "$ALL_MISSING" && \
-    MISSING=$(echo "$ALL_MISSING" | grep -v -E "libnv|libcuda" || true) && \
-    echo "=== After excluding NVIDIA libs ===" && echo "$MISSING" && \
-    if [ -n "$MISSING" ]; then echo "ERROR: Missing libraries"; exit 1; fi && \
+# NVIDIA libraries excluded: libnvinfer, libnvonnxparser, libcudart, libcuda, libnvcuvid, libnvrtc
+RUN set -e && \
+    echo "=== Checking library dependencies ===" && \
+    LDD_OUTPUT=$(ldd /usr/local/bin/ffmpeg 2>&1) && \
+    ALL_MISSING=$(echo "$LDD_OUTPUT" | grep "not found" || true) && \
+    if [ -n "$ALL_MISSING" ]; then \
+        echo "Libraries reported as 'not found':" && \
+        echo "$ALL_MISSING" && \
+        # Filter out NVIDIA libraries (provided by nvidia-container-toolkit at runtime)
+        MISSING=$(echo "$ALL_MISSING" | grep -v -E "libnv|libcuda|libcublas|libcurand|libcufft" || true) && \
+        if [ -n "$MISSING" ]; then \
+            echo "ERROR: Non-NVIDIA libraries missing:" && \
+            echo "$MISSING" && \
+            exit 1; \
+        fi && \
+        echo "All missing libs are NVIDIA (provided at runtime)"; \
+    fi && \
     echo "All FFmpeg dependencies satisfied"
 
 # Capture ffmpeg capabilities (may fail if TensorRT enabled - NVIDIA libs only available at runtime)
