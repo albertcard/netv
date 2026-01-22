@@ -1082,7 +1082,7 @@ PTXRULES
         # TensorRT (libnvinfer) and CUDA (libcuda) are loaded via dlopen at runtime.
         # CUDA kernels are compiled to PTX and loaded via Driver API - no cudart dependency.
         sed -i '/enabled libtorch.*require_cxx libtorch/a\
-enabled libtensorrt       && check_cxxflags -std=c++17 && check_header NvInfer.h' "$CONFIGURE"
+enabled libtensorrt       && check_cxxflags -std=c++17 && check_headers NvInfer.h' "$CONFIGURE"
         echo "Patched configure (TensorRT via dlopen, CUDA linked for kernels)"
     fi
 
