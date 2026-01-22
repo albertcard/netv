@@ -11,6 +11,94 @@ export DEBIAN_FRONTEND="${DEBIAN_FRONTEND:-noninteractive}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # =============================================================================
+# Helper Functions
+# =============================================================================
+
+# Log error message to stderr
+log_error() {
+    echo "ERROR: $*" >&2
+}
+
+# Log warning message to stderr
+log_warn() {
+    echo "WARNING: $*" >&2
+}
+
+# Log info message
+log_info() {
+    echo "INFO: $*"
+}
+
+# Verify a patch was applied by checking for expected content
+verify_patch() {
+    local file="$1"
+    local pattern="$2"
+    local description="$3"
+    if ! grep -q "$pattern" "$file"; then
+        log_error "Patch verification failed: $description"
+        log_error "Expected pattern '$pattern' not found in $file"
+        return 1
+    fi
+    return 0
+}
+
+# Clone a git repo with validation
+git_clone_validated() {
+    local url="$1"
+    local dir="$2"
+    local depth="${3:-1}"
+    local ref="${4:-}"
+
+    if [ -n "$ref" ]; then
+        git clone --depth "$depth" --branch "$ref" "$url" "$dir"
+    else
+        git clone --depth "$depth" "$url" "$dir"
+    fi
+
+    # Validate clone succeeded
+    if [ ! -d "$dir/.git" ]; then
+        log_error "Git clone failed: $url -> $dir"
+        return 1
+    fi
+    return 0
+}
+
+# Update or clone a git repo
+git_update_or_clone() {
+    local url="$1"
+    local dir="$2"
+    local depth="${3:-1}"
+    local ref="${4:-}"
+
+    if [ -d "$dir/.git" ]; then
+        if ! git -C "$dir" pull; then
+            log_warn "Git pull failed for $dir, re-cloning..."
+            rm -rf "$dir"
+            git_clone_validated "$url" "$dir" "$depth" "$ref"
+        fi
+    else
+        rm -rf "$dir"  # Remove if exists but not a git repo
+        git_clone_validated "$url" "$dir" "$depth" "$ref"
+    fi
+}
+
+# Detect Ubuntu version with validation
+get_ubuntu_version() {
+    local version_id
+    if [ ! -f /etc/os-release ]; then
+        log_error "/etc/os-release not found - cannot detect Ubuntu version"
+        return 1
+    fi
+    version_id=$(grep "^VERSION_ID=" /etc/os-release | cut -d'"' -f2)
+    if [ -z "$version_id" ]; then
+        log_error "Could not parse VERSION_ID from /etc/os-release"
+        return 1
+    fi
+    # Remove dots: "24.04" -> "2404"
+    echo "$version_id" | tr -d '.'
+}
+
+# =============================================================================
 # Potentially Viable Pre-built FFmpeg alternatives
 #
 # DOCKER IMAGES
@@ -222,7 +310,16 @@ BUILD_DIR="${BUILD_DIR:-$HOME/ffmpeg_build}"    # Build artifacts cache (can be 
 BIN_DIR="${BIN_DIR:-$HOME/.local/bin}"          # Final binary install location
 LIB_DIR="${LIB_DIR:-$HOME/.local/lib}"          # Final shared library install location (for libva)
 
-NPROC=$(nproc)
+# Get number of processors with fallback
+NPROC=$(nproc 2>/dev/null || echo 4)
+[ "$NPROC" -lt 1 ] 2>/dev/null && NPROC=4
+
+# Ensure HOME is set (for cron/systemd contexts)
+: "${HOME:=$(getent passwd "$(id -un)" | cut -d: -f6)}"
+if [ -z "$HOME" ]; then
+    log_error "HOME environment variable not set and could not be detected"
+    exit 1
+fi
 
 mkdir -p "$SRC_DIR" "$BUILD_DIR" "$BIN_DIR" "$LIB_DIR"
 
@@ -322,9 +419,12 @@ if [ "$ENABLE_NVIDIA_CUDA" = "1" ]; then
         if [ "$CUDA_VERSION" = "auto" ] || ! command -v nvcc &> /dev/null; then
             if ! dpkg -l cuda-keyring 2>/dev/null | grep -q ^ii; then
                 # Detect Ubuntu version for correct CUDA repo (24.04 -> ubuntu2404, 25.04 -> ubuntu2504)
-                UBUNTU_VERSION=$(grep VERSION_ID /etc/os-release | cut -d'"' -f2 | tr -d '.')
+                UBUNTU_VERSION=$(get_ubuntu_version) || exit 1
                 CUDA_REPO_URL="https://developer.download.nvidia.com/compute/cuda/repos/ubuntu${UBUNTU_VERSION}/x86_64/cuda-keyring_1.1-1_all.deb"
-                wget --progress=dot:giga "$CUDA_REPO_URL" -O cuda-keyring.deb
+                if ! wget --progress=dot:giga "$CUDA_REPO_URL" -O cuda-keyring.deb; then
+                    log_error "Failed to download CUDA keyring from $CUDA_REPO_URL"
+                    exit 1
+                fi
                 sudo dpkg -i cuda-keyring.deb
                 rm cuda-keyring.deb
                 sudo apt-get update
@@ -412,19 +512,19 @@ extern __DEVICE_FUNCTIONS_DECL__ __device_builtin__ float                  rsqrt
 
     if [ "$NVCC_GENCODE" = "native" ]; then
         # Detect GPU compute capability
-        if command -v nvidia-smi &> /dev/null; then
-            COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader | head -1)
-            if [ -n "$COMPUTE_CAP" ]; then
-                COMPUTE_CAP_NUM=$(echo "$COMPUTE_CAP" | tr -d '.')
-                NVCC_ARCH="-arch=sm_${COMPUTE_CAP_NUM}"
-                echo "CUDA $CUDA_VERSION NVCC_GENCODE=native -> $NVCC_ARCH (detected via nvidia-smi)"
-            else
-                echo "Warning: nvidia-smi found but no GPU detected, falling back to minimum" >&2
-                NVCC_GENCODE="minimum"
-            fi
-        else
-            echo "Warning: nvidia-smi not found, falling back to minimum arch" >&2
+        if ! command -v nvidia-smi &> /dev/null; then
+            log_warn "nvidia-smi not found, falling back to minimum arch"
             NVCC_GENCODE="minimum"
+        elif ! COMPUTE_CAP=$(nvidia-smi --query-gpu=compute_cap --format=csv,noheader 2>/dev/null | head -1); then
+            log_warn "nvidia-smi failed to query GPU, falling back to minimum arch"
+            NVCC_GENCODE="minimum"
+        elif [ -z "$COMPUTE_CAP" ]; then
+            log_warn "nvidia-smi found but no GPU detected, falling back to minimum"
+            NVCC_GENCODE="minimum"
+        else
+            COMPUTE_CAP_NUM=$(echo "$COMPUTE_CAP" | tr -d '.')
+            NVCC_ARCH="-arch=sm_${COMPUTE_CAP_NUM}"
+            log_info "CUDA $CUDA_VERSION NVCC_GENCODE=native -> $NVCC_ARCH (detected via nvidia-smi)"
         fi
     fi
 
@@ -467,12 +567,16 @@ fi
 # AMF is header-only at build time; runtime driver comes from host's AMD GPU driver
 AMF_FLAGS=()
 if [ "$ENABLE_AMD_AMF" = "1" ]; then
-    cd "$SRC_DIR" &&
-    ([ -d AMF/.git ] && git -C AMF pull || (rm -rf AMF && git clone --depth 1 https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git)) &&
-    mkdir -p "$BUILD_DIR/include/AMF" &&
+    cd "$SRC_DIR"
+    git_update_or_clone "https://github.com/GPUOpen-LibrariesAndSDKs/AMF.git" "AMF" 1
+    if [ ! -d "AMF/amf/public/include" ]; then
+        log_error "AMF clone succeeded but include directory not found"
+        exit 1
+    fi
+    mkdir -p "$BUILD_DIR/include/AMF"
     cp -r AMF/amf/public/include/* "$BUILD_DIR/include/AMF/"
     AMF_FLAGS=(--enable-amf)
-    echo "AMF headers installed for AMD GPU encoding"
+    log_info "AMF headers installed for AMD GPU encoding"
 fi
 
 if [ "$PHASE" = "deps" ]; then
@@ -484,11 +588,11 @@ fi
 # libx264 (H.264/AVC encoder)
 # Build with --bit-depth=all for 8-bit and 10-bit support
 if [ "$BUILD_LIBX264" = "1" ]; then
-    cd "$SRC_DIR" &&
-    ([ -d x264/.git ] && git -C x264 pull || (rm -rf x264 && git clone --depth 1 https://code.videolan.org/videolan/x264.git)) &&
-    cd x264 &&
-    PATH="$BIN_DIR:$PATH" ./configure --prefix="$BUILD_DIR" --enable-static --enable-pic --disable-cli --bit-depth=all &&
-    PATH="$BIN_DIR:$PATH" make -j $NPROC &&
+    cd "$SRC_DIR"
+    git_update_or_clone "https://code.videolan.org/videolan/x264.git" "x264" 1
+    cd x264
+    PATH="$BIN_DIR:$PATH" ./configure --prefix="$BUILD_DIR" --enable-static --enable-pic --disable-cli --bit-depth=all
+    PATH="$BIN_DIR:$PATH" make -j "$NPROC"
     make install
 fi
 
@@ -497,9 +601,9 @@ fi
 # Multilib build: 8-bit + 10-bit + 12-bit support (required for HDR)
 # Build order: 12-bit → 10-bit → 8-bit (main links the others)
 if [ "$BUILD_LIBX265" = "1" ]; then
-    cd "$SRC_DIR" &&
-    ([ -d x265_git/.git ] && git -C x265_git pull || (rm -rf x265_git && git clone --depth 1 https://bitbucket.org/multicoreware/x265_git.git)) &&
-    cd x265_git/build/linux &&
+    cd "$SRC_DIR"
+    git_update_or_clone "https://bitbucket.org/multicoreware/x265_git.git" "x265_git" 1
+    cd x265_git/build/linux
 
     # Clean previous builds
     rm -rf 8bit 10bit 12bit &&
@@ -574,94 +678,106 @@ fi
 
 # libaom (AV1 reference codec)
 if [ "$BUILD_LIBAOM" = "1" ]; then
-    cd "$SRC_DIR" &&
-    ([ -d aom/.git ] && git -C aom pull || (rm -rf aom && git clone --depth 1 https://aomedia.googlesource.com/aom)) &&
-    mkdir -p aom_build &&
-    cd aom_build &&
-    PATH="$BIN_DIR:$PATH" cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" -DENABLE_TESTS=OFF -DENABLE_NASM=on -DBUILD_SHARED_LIBS=OFF -DCONFIG_AV1_HIGHBITDEPTH=1 ../aom &&
-    PATH="$BIN_DIR:$PATH" make -j $NPROC &&
+    cd "$SRC_DIR"
+    git_update_or_clone "https://aomedia.googlesource.com/aom" "aom" 1
+    mkdir -p aom_build
+    cd aom_build
+    PATH="$BIN_DIR:$PATH" cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" -DENABLE_TESTS=OFF -DENABLE_NASM=on -DBUILD_SHARED_LIBS=OFF -DCONFIG_AV1_HIGHBITDEPTH=1 ../aom
+    PATH="$BIN_DIR:$PATH" make -j "$NPROC"
     make install
 fi
 
 # libwebp (WebP image codec)
 if [ "$BUILD_LIBWEBP" = "1" ]; then
-    cd "$SRC_DIR" &&
-    ([ -d libwebp/.git ] && git -C libwebp pull || (rm -rf libwebp && git clone --depth 1 https://chromium.googlesource.com/webm/libwebp)) &&
-    cd libwebp &&
-    ./autogen.sh &&
-    ./configure --prefix="$BUILD_DIR" --disable-shared --enable-static &&
-    make -j $NPROC &&
+    cd "$SRC_DIR"
+    git_update_or_clone "https://chromium.googlesource.com/webm/libwebp" "libwebp" 1
+    cd libwebp
+    ./autogen.sh
+    ./configure --prefix="$BUILD_DIR" --disable-shared --enable-static
+    make -j "$NPROC"
     make install
 fi
 
 # libjxl (JPEG XL image codec)
 # Ubuntu 24.04 ships 0.7.0 which is quite old; latest is 0.11.1 with HDR improvements
 if [ "$BUILD_LIBJXL" = "1" ]; then
-    cd "$SRC_DIR" &&
-    ([ -d libjxl/.git ] && git -C libjxl pull || (rm -rf libjxl && git clone --depth 1 --recursive https://github.com/libjxl/libjxl.git)) &&
-    cd libjxl &&
-    mkdir -p build &&
-    cd build &&
+    cd "$SRC_DIR"
+    # libjxl needs --recursive for submodules
+    if [ -d libjxl/.git ]; then
+        git -C libjxl pull && git -C libjxl submodule update --init --recursive
+    else
+        rm -rf libjxl
+        git clone --depth 1 --recursive https://github.com/libjxl/libjxl.git
+        if [ ! -d libjxl/.git ]; then
+            log_error "libjxl clone failed"
+            exit 1
+        fi
+    fi
+    cd libjxl
+    mkdir -p build
+    cd build
     cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_SHARED_LIBS=OFF -DJPEGXL_ENABLE_BENCHMARK=OFF -DJPEGXL_ENABLE_EXAMPLES=OFF \
         -DJPEGXL_ENABLE_MANPAGES=OFF -DJPEGXL_ENABLE_PLUGINS=OFF -DJPEGXL_ENABLE_VIEWERS=OFF \
-        -DJPEGXL_ENABLE_TOOLS=OFF -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_JPEGLI=OFF .. &&
-    make -j $NPROC &&
+        -DJPEGXL_ENABLE_TOOLS=OFF -DJPEGXL_ENABLE_DOXYGEN=OFF -DJPEGXL_ENABLE_JPEGLI=OFF ..
+    make -j "$NPROC"
     make install
 fi
 
 # libvpl (Intel Video Processing Library / QuickSync)
 if [ "$BUILD_LIBVPL" = "1" ]; then
-    cd "$SRC_DIR" &&
-    ([ -d libvpl/.git ] && git -C libvpl pull || (rm -rf libvpl && git clone --depth 1 https://github.com/intel/libvpl.git)) &&
-    mkdir -p libvpl/build &&
-    cd libvpl/build &&
-    cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" -DBUILD_SHARED_LIBS=OFF .. &&
-    make -j $NPROC &&
+    cd "$SRC_DIR"
+    git_update_or_clone "https://github.com/intel/libvpl.git" "libvpl" 1
+    mkdir -p libvpl/build
+    cd libvpl/build
+    cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" -DBUILD_SHARED_LIBS=OFF ..
+    make -j "$NPROC"
     make install
 fi
 
 # libdav1d (AV1 decoder)
 if [ "$BUILD_LIBDAV1D" = "1" ]; then
-    cd "$SRC_DIR" &&
-    ([ -d dav1d/.git ] && git -C dav1d pull || (rm -rf dav1d && git clone --depth 1 https://code.videolan.org/videolan/dav1d.git)) &&
-    cd dav1d &&
+    cd "$SRC_DIR"
+    git_update_or_clone "https://code.videolan.org/videolan/dav1d.git" "dav1d" 1
+    cd dav1d
     if [ -f build/build.ninja ]; then
-        meson setup --reconfigure build --buildtype=release --default-library=static --prefix="$BUILD_DIR" --libdir="$BUILD_DIR/lib"
+        meson setup --reconfigure build --buildtype=release --default-library=static --prefix="$BUILD_DIR" --libdir="$BUILD_DIR/lib" || \
+        meson setup --wipe build --buildtype=release --default-library=static --prefix="$BUILD_DIR" --libdir="$BUILD_DIR/lib"
     else
         meson setup build --buildtype=release --default-library=static --prefix="$BUILD_DIR" --libdir="$BUILD_DIR/lib"
-    fi &&
-    ninja -C build &&
+    fi
+    ninja -C build
     ninja -C build install
 fi
 
 # libsvtav1 (AV1 encoder)
 if [ "$BUILD_LIBSVTAV1" = "1" ]; then
-    cd "$SRC_DIR" &&
-    ([ -d SVT-AV1/.git ] && git -C SVT-AV1 pull || (rm -rf SVT-AV1 && git clone --depth 1 https://gitlab.com/AOMediaCodec/SVT-AV1.git)) &&
-    mkdir -p SVT-AV1/build &&
-    cd SVT-AV1/build &&
+    cd "$SRC_DIR"
+    git_update_or_clone "https://gitlab.com/AOMediaCodec/SVT-AV1.git" "SVT-AV1" 1
+    mkdir -p SVT-AV1/build
+    cd SVT-AV1/build
     if [ -n "$SVTAV1_GIT_REF" ]; then
-        git -C .. fetch --depth 1 origin "$SVTAV1_GIT_REF" &&
+        git -C .. fetch --depth 1 origin "$SVTAV1_GIT_REF"
         git -C .. checkout -q FETCH_HEAD
-    fi &&
-    PATH="$BIN_DIR:$PATH" cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release -DBUILD_DEC=OFF -DBUILD_SHARED_LIBS=OFF .. &&
-    PATH="$BIN_DIR:$PATH" make -j $NPROC &&
+    fi
+    PATH="$BIN_DIR:$PATH" cmake -G "Unix Makefiles" -DCMAKE_INSTALL_PREFIX="$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release -DBUILD_DEC=OFF -DBUILD_SHARED_LIBS=OFF ..
+    PATH="$BIN_DIR:$PATH" make -j "$NPROC"
     make install
 fi
 
 # libvmaf (video quality metrics)
 if [ "$BUILD_LIBVMAF" = "1" ]; then
-    cd "$SRC_DIR" &&
-    ([ -d vmaf/.git ] && git -C vmaf pull || (rm -rf vmaf && git clone --depth 1 https://github.com/Netflix/vmaf)) &&
-    mkdir -p vmaf/libvmaf/build &&
-    cd vmaf/libvmaf/build &&
+    cd "$SRC_DIR"
+    git_update_or_clone "https://github.com/Netflix/vmaf" "vmaf" 1
+    mkdir -p vmaf/libvmaf/build
+    cd vmaf/libvmaf/build
     if [ -f build.ninja ]; then
-        meson setup --reconfigure -Denable_tests=false -Denable_docs=false --buildtype=release --default-library=static '../' --prefix "$BUILD_DIR" --bindir="$BIN_DIR" --libdir="$BUILD_DIR/lib"
+        meson setup --reconfigure -Denable_tests=false -Denable_docs=false --buildtype=release --default-library=static '../' --prefix "$BUILD_DIR" --bindir="$BIN_DIR" --libdir="$BUILD_DIR/lib" || \
+        meson setup --wipe -Denable_tests=false -Denable_docs=false --buildtype=release --default-library=static '../' --prefix "$BUILD_DIR" --bindir="$BIN_DIR" --libdir="$BUILD_DIR/lib"
     else
         meson setup -Denable_tests=false -Denable_docs=false --buildtype=release --default-library=static '../' --prefix "$BUILD_DIR" --bindir="$BIN_DIR" --libdir="$BUILD_DIR/lib"
-    fi &&
-    ninja &&
+    fi
+    ninja
     ninja install
 fi
 
@@ -669,16 +785,17 @@ fi
 # Ubuntu 24.04 ships 2.20.0 which lacks Intel Xe kernel driver support (added in 2.21)
 # Build from source to get Xe support for newer Intel GPUs
 if [ "$BUILD_LIBVA" = "1" ]; then
-    cd "$SRC_DIR" &&
-    ([ -d libva/.git ] && git -C libva pull || (rm -rf libva && git clone --depth 1 https://github.com/intel/libva.git)) &&
-    cd libva &&
+    cd "$SRC_DIR"
+    git_update_or_clone "https://github.com/intel/libva.git" "libva" 1
+    cd libva
     if [ -f build/build.ninja ]; then
-        meson setup --reconfigure build --buildtype=release --default-library=shared --prefix="$BUILD_DIR" --libdir="$BUILD_DIR/lib"
+        meson setup --reconfigure build --buildtype=release --default-library=shared --prefix="$BUILD_DIR" --libdir="$BUILD_DIR/lib" || \
+        meson setup --wipe build --buildtype=release --default-library=shared --prefix="$BUILD_DIR" --libdir="$BUILD_DIR/lib"
     else
         meson setup build --buildtype=release --default-library=shared --prefix="$BUILD_DIR" --libdir="$BUILD_DIR/lib"
-    fi &&
-    ninja -C build &&
-    ninja -C build install &&
+    fi
+    ninja -C build
+    ninja -C build install
     # Copy shared libs to permanent location (LIB_DIR) for runtime
     cp -a "$BUILD_DIR/lib"/libva*.so* "$LIB_DIR/"
 fi
@@ -705,7 +822,8 @@ build_libplacebo() {
     fi
 
     if [ -f build/build.ninja ]; then
-        meson setup --reconfigure "${meson_args[@]}" build
+        meson setup --reconfigure "${meson_args[@]}" build || \
+        meson setup --wipe "${meson_args[@]}" build
     else
         meson setup "${meson_args[@]}" build
     fi
@@ -736,15 +854,15 @@ if [ "$BUILD_LIBPLACEBO" = "1" ]; then
     fi
     cp "$VULKAN_SDK/lib/pkgconfig/shaderc_combined.pc" "$VULKAN_SDK/lib/pkgconfig/shaderc.pc"
 
-    cd "$SRC_DIR" &&
-    ([ -d libplacebo/.git ] && git -C libplacebo pull || (rm -rf libplacebo && git clone --depth 1 https://code.videolan.org/videolan/libplacebo.git)) &&
-    cd libplacebo &&
+    cd "$SRC_DIR"
+    git_update_or_clone "https://code.videolan.org/videolan/libplacebo.git" "libplacebo" 1
+    cd libplacebo
     if [ -n "$LIBPLACEBO_GIT_REF" ]; then
-        git fetch --depth 1 origin "$LIBPLACEBO_GIT_REF" &&
+        git fetch --depth 1 origin "$LIBPLACEBO_GIT_REF"
         git checkout -q FETCH_HEAD
-    fi &&
-    build_libplacebo &&
-    ninja -C build &&
+    fi
+    build_libplacebo
+    ninja -C build
     ninja -C build install
 fi
 
@@ -795,9 +913,17 @@ if [ "$ENABLE_LIBTORCH" = "1" ]; then
         else
             LIBTORCH_URL="https://download.pytorch.org/libtorch/${TORCH_VARIANT}/libtorch-cxx11-abi-shared-with-deps-${LIBTORCH_VERSION}%2B${TORCH_VARIANT}.zip"
         fi
-        wget --progress=dot:giga -O libtorch.zip "$LIBTORCH_URL"
+        if ! wget --progress=dot:giga -O libtorch.zip "$LIBTORCH_URL"; then
+            log_error "Failed to download LibTorch from $LIBTORCH_URL"
+            exit 1
+        fi
         unzip -q libtorch.zip
         rm -f libtorch.zip
+        # Verify extraction succeeded before marking complete
+        if [ ! -f "$LIBTORCH_DIR/lib/libtorch.so" ]; then
+            log_error "LibTorch extraction failed - libtorch.so not found"
+            exit 1
+        fi
         touch "$LIBTORCH_MARKER"
     fi
 
@@ -1029,7 +1155,11 @@ typedef struct TRTOptions {\
         {offsetof(DnnContext, trt_option), .module = \&ff_dnn_backend_tensorrt},\
 #endif
         }' "$DNN_INTERFACE_C"
-        echo "Patched dnn_interface.c"
+        # Verify patch was applied
+        if ! verify_patch "$DNN_INTERFACE_C" "ff_dnn_backend_tensorrt" "dnn_interface.c TensorRT registration"; then
+            exit 1
+        fi
+        log_info "Patched dnn_interface.c"
     fi
 
     # Patch dnn/Makefile to add TensorRT objects and CUDA kernel PTX compilation
@@ -1067,7 +1197,11 @@ libavfilter/dnn/dnn_cuda_kernels_ptx.c: libavfilter/dnn/dnn_cuda_kernels.ptx
 libavfilter/dnn/dnn_cuda_kernels_ptx.o: libavfilter/dnn/dnn_cuda_kernels_ptx.c
 	$(CC) $(CPPFLAGS) $(CFLAGS) -c -o $@ $<
 PTXRULES
-        echo "Patched dnn/Makefile with TensorRT and CUDA PTX kernel support"
+        # Verify Makefile patch
+        if ! verify_patch "$DNN_MAKEFILE" "dnn_cuda_kernels_ptx.o" "dnn/Makefile PTX rules"; then
+            exit 1
+        fi
+        log_info "Patched dnn/Makefile with TensorRT and CUDA PTX kernel support"
     fi
 
     # Patch configure to add --enable-libtensorrt option
@@ -1190,8 +1324,4 @@ hash -r
 
 grep -q "$BUILD_DIR/share/man" "$HOME/.manpath" 2>/dev/null || echo "MANPATH_MAP $BIN_DIR $BUILD_DIR/share/man" >> "$HOME/.manpath"
 
-# rm -rf ~/ffmpeg_build ~/.local/bin/{ffmpeg,ffprobe,ffplay,x264,x265}
-# sed -i '/ffmpeg_build/d' ~/.manpath
-# hash -r
-# --extra-cflags="-D_GNU_SOURCE"
-# cat ~/ffmpeg_sources/ffmpeg/ffbuild/config.log
+log_info "FFmpeg build completed successfully"

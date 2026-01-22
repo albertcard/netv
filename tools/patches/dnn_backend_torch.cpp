@@ -460,16 +460,27 @@ static void infer_completion_callback(void *args) {
                                                   .contiguous();
 
                 // Copy to output CUDA frame
+                cudaError_t cuda_err;
                 if (out_linesize == out_width * 3) {
                     // Contiguous - single copy
-                    cudaMemcpy(cuda_out, output_hwc.data_ptr(),
-                               out_height * out_width * 3, cudaMemcpyDeviceToDevice);
+                    cuda_err = cudaMemcpy(cuda_out, output_hwc.data_ptr(),
+                                          out_height * out_width * 3, cudaMemcpyDeviceToDevice);
+                    if (cuda_err != cudaSuccess) {
+                        av_log(th_model->ctx, AV_LOG_ERROR, "cudaMemcpy failed: %s\n",
+                               cudaGetErrorString(cuda_err));
+                        goto err;
+                    }
                 } else {
                     // Padded rows - copy row by row
                     for (int y = 0; y < out_height; y++) {
-                        cudaMemcpy(cuda_out + y * out_linesize,
-                                   (uint8_t*)output_hwc.data_ptr() + y * out_width * 3,
-                                   out_width * 3, cudaMemcpyDeviceToDevice);
+                        cuda_err = cudaMemcpy(cuda_out + y * out_linesize,
+                                              (uint8_t*)output_hwc.data_ptr() + y * out_width * 3,
+                                              out_width * 3, cudaMemcpyDeviceToDevice);
+                        if (cuda_err != cudaSuccess) {
+                            av_log(th_model->ctx, AV_LOG_ERROR, "cudaMemcpy row %d failed: %s\n",
+                                   y, cudaGetErrorString(cuda_err));
+                            goto err;
+                        }
                     }
                 }
 
@@ -513,16 +524,27 @@ static void infer_completion_callback(void *args) {
                 }
 
                 // Copy to output CUDA frame
+                cudaError_t cuda_err4;
                 if (out_linesize == out_width * 4) {
                     // Contiguous - single copy
-                    cudaMemcpy(cuda_out, output_hwc4.data_ptr(),
-                               out_height * out_width * 4, cudaMemcpyDeviceToDevice);
+                    cuda_err4 = cudaMemcpy(cuda_out, output_hwc4.data_ptr(),
+                                           out_height * out_width * 4, cudaMemcpyDeviceToDevice);
+                    if (cuda_err4 != cudaSuccess) {
+                        av_log(th_model->ctx, AV_LOG_ERROR, "cudaMemcpy failed: %s\n",
+                               cudaGetErrorString(cuda_err4));
+                        goto err;
+                    }
                 } else {
                     // Padded rows - copy row by row
                     for (int y = 0; y < out_height; y++) {
-                        cudaMemcpy(cuda_out + y * out_linesize,
-                                   (uint8_t*)output_hwc4.data_ptr() + y * out_width * 4,
-                                   out_width * 4, cudaMemcpyDeviceToDevice);
+                        cuda_err4 = cudaMemcpy(cuda_out + y * out_linesize,
+                                               (uint8_t*)output_hwc4.data_ptr() + y * out_width * 4,
+                                               out_width * 4, cudaMemcpyDeviceToDevice);
+                        if (cuda_err4 != cudaSuccess) {
+                            av_log(th_model->ctx, AV_LOG_ERROR, "cudaMemcpy row %d failed: %s\n",
+                                   y, cudaGetErrorString(cuda_err4));
+                            goto err;
+                        }
                     }
                 }
 
@@ -559,12 +581,20 @@ static void infer_completion_callback(void *args) {
         goto err;
     }
     task->inference_done++;
-    av_freep(&request->lltask);
 err:
+    // Clear lltask pointer (will be freed separately if still in queue, or already processed)
+    request->lltask = NULL;
+
+    // Free the inference request data (tensors)
     th_free_request(infer_request);
 
+    // Don't free infer_request struct here - it's reused when pushed back to request_queue
+    // The struct will be freed when the model is destroyed
+
     if (ff_safe_queue_push_back(th_model->request_queue, request) < 0) {
-        destroy_request_item(&request);
+        // Only destroy if we can't push back - this will free the struct
+        av_freep(&request->infer_request);
+        av_freep(&request);
         av_log(th_model->ctx, AV_LOG_ERROR, "Unable to push back request_queue when failed to start inference.\n");
     }
 }
@@ -721,16 +751,16 @@ static DNNModel *dnn_load_model_th(DnnContext *ctx, DNNFunctionType func_type, A
             goto fail;
         }
         // Load CUDA kernels - required for libtorch CUDA ops
-        static bool cuda_lib_loaded = false;
-        if (!cuda_lib_loaded) {
-            cuda_lib_loaded = true;
+        // Thread-safe initialization using call_once
+        static std::once_flag cuda_lib_once;
+        std::call_once(cuda_lib_once, [ctx]() {
             void *cuda_handle = dlopen("libtorch_cuda.so", RTLD_NOW | RTLD_GLOBAL);
             if (cuda_handle) {
                 av_log(ctx, AV_LOG_DEBUG, "libtorch_cuda.so loaded\n");
             } else {
                 av_log(ctx, AV_LOG_WARNING, "Failed to load libtorch_cuda.so: %s\n", dlerror());
             }
-        }
+        });
     } else if (!device.is_cpu()) {
         av_log(ctx, AV_LOG_ERROR, "Not supported device:\"%s\"\n", device_name);
         goto fail;
@@ -738,15 +768,15 @@ static DNNModel *dnn_load_model_th(DnnContext *ctx, DNNFunctionType func_type, A
 
     try {
         th_model->jit_model = new torch::jit::Module;
-    // Load TensorRT runtime if available (enables TRT-compiled models)
-    static bool trt_init_attempted = false;
-    if (!trt_init_attempted) {
-        trt_init_attempted = true;
-        void *trt_handle = dlopen("libtorchtrt_runtime.so", RTLD_NOW | RTLD_GLOBAL);
-        if (trt_handle) {
-            av_log(ctx, AV_LOG_INFO, "TensorRT runtime loaded\n");
-        }
-    }
+        // Load TensorRT runtime if available (enables TRT-compiled models)
+        // Thread-safe initialization using call_once
+        static std::once_flag trt_once;
+        std::call_once(trt_once, [ctx]() {
+            void *trt_handle = dlopen("libtorchtrt_runtime.so", RTLD_NOW | RTLD_GLOBAL);
+            if (trt_handle) {
+                av_log(ctx, AV_LOG_INFO, "TensorRT runtime loaded\n");
+            }
+        });
         (*th_model->jit_model) = torch::jit::load(ctx->model_filename);
         th_model->jit_model->to(device);
         av_log(ctx, AV_LOG_INFO, "Model loaded to device: %s\n", device_name);
@@ -813,7 +843,7 @@ static DNNModel *dnn_load_model_th(DnnContext *ctx, DNNFunctionType func_type, A
 fail:
     if (item) {
         destroy_request_item(&item);
-        av_freep(&item);
+        // Note: destroy_request_item already calls av_freep(arg), so item is now NULL
     }
     dnn_free_model_th(&model);
     return NULL;

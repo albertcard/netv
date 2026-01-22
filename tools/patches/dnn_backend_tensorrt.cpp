@@ -40,6 +40,8 @@
 #include <vector>
 #include <memory>
 #include <cstring>
+#include <atomic>
+#include <mutex>
 
 // ============================================================================
 // CUDA Driver API types (from cuda.h - we dlopen libcuda.so instead of linking)
@@ -81,7 +83,8 @@ static void *libcuda_handle = NULL;
 static void *libnvinfer_handle = NULL;
 static int cuda_loaded = 0;
 static int tensorrt_loaded = 0;
-static int libs_load_attempted = 0;
+static std::atomic<int> libs_load_attempted(0);
+static std::mutex libs_load_mutex;
 
 // CUDA Driver API function pointers
 static fn_cuInit p_cuInit = NULL;
@@ -134,9 +137,17 @@ static const char* cuda_error_string(CUresult err) {
 
 // Load CUDA Driver API and TensorRT via dlopen
 static int load_libs(void *log_ctx) {
-    if (libs_load_attempted)
+    // Double-checked locking for thread safety
+    if (libs_load_attempted.load(std::memory_order_acquire))
         return (cuda_loaded && tensorrt_loaded) ? 0 : AVERROR(ENOSYS);
-    libs_load_attempted = 1;
+
+    std::lock_guard<std::mutex> lock(libs_load_mutex);
+    // Check again after acquiring lock
+    if (libs_load_attempted.load(std::memory_order_relaxed))
+        return (cuda_loaded && tensorrt_loaded) ? 0 : AVERROR(ENOSYS);
+
+    // Set at end of function, not here, to ensure proper initialization
+    // before other threads see libs_load_attempted == 1
 
     // Load CUDA Driver API (libcuda.so - NOT libcudart.so!)
     const char *cuda_names[] = {"libcuda.so.1", "libcuda.so", NULL};
@@ -148,6 +159,7 @@ static int load_libs(void *log_ctx) {
                "CUDA driver not available: %s\n"
                "Install NVIDIA driver or run with --gpus all to use nvidia-container-toolkit\n",
                dlerror());
+        libs_load_attempted.store(1, std::memory_order_release);
         return AVERROR(ENOSYS);
     }
 
@@ -226,6 +238,9 @@ static int load_libs(void *log_ctx) {
 
     tensorrt_loaded = 1;
     av_log(log_ctx, AV_LOG_INFO, "TensorRT library loaded via dlopen\n");
+
+    // Mark as attempted AFTER successful initialization (release semantics)
+    libs_load_attempted.store(1, std::memory_order_release);
     return 0;
 }
 
@@ -511,6 +526,14 @@ static int get_input_trt(DNNModel *model, DNNData *input, const char *input_name
 {
     TRTModel *trt_model = (TRTModel *)model;
 
+    // Validate tensor has expected dimensions (NCHW = 4)
+    if (trt_model->input_dims.nbDims != 4) {
+        av_log(trt_model->ctx, AV_LOG_ERROR,
+               "Expected 4D input tensor (NCHW), got %d dimensions\n",
+               trt_model->input_dims.nbDims);
+        return AVERROR(EINVAL);
+    }
+
     input->dt = DNN_FLOAT;
     input->order = DCO_RGB;
     input->layout = DL_NCHW;
@@ -652,6 +675,14 @@ static int fill_model_input_trt(TRTModel *trt_model, TRTRequestItem *request)
         return AVERROR(EIO);
     }
 
+    // CRITICAL: Must synchronize before freeing CPU buffer - async copy may still be reading it
+    err = p_cuStreamSynchronize(trt_model->stream);
+    if (err != CUDA_SUCCESS) {
+        av_log(ctx, AV_LOG_ERROR, "Stream sync after input copy failed: %s\n", cuda_error_string(err));
+        av_freep(&input_data);
+        return AVERROR(EIO);
+    }
+
     av_freep(&input_data);
     return 0;
 }
@@ -663,6 +694,12 @@ static int trt_start_inference(void *args)
     TaskItem *task = lltask->task;
     TRTModel *trt_model = (TRTModel *)task->model;
     DnnContext *ctx = trt_model->ctx;
+
+    // Validate required resources exist
+    if (!trt_model->context || !trt_model->stream) {
+        av_log(ctx, AV_LOG_ERROR, "TensorRT context or CUDA stream not initialized\n");
+        return DNN_GENERIC_ERROR;
+    }
 
     // Set tensor addresses (TensorRT 10.x API)
     // Note: TensorRT expects void* but we have CUdeviceptr - cast appropriately
@@ -706,6 +743,7 @@ static void infer_completion_callback(void *args)
     size_t output_elements;
     int ret;
 
+    // Output dimensions are validated during model loading, safe to access
     outputs.order = DCO_RGB;
     outputs.layout = DL_NCHW;
     outputs.dt = DNN_FLOAT;
@@ -716,6 +754,12 @@ static void infer_completion_callback(void *args)
 
     int out_height = outputs.dims[2];
     int out_width = outputs.dims[3];
+
+    // Validate stream exists (should always be true if model loaded successfully)
+    if (!trt_model->stream) {
+        av_log(ctx, AV_LOG_ERROR, "CUDA stream is NULL\n");
+        goto err;
+    }
 
     // Check for CUDA output frames (zero-copy output path)
     if (task->out_frame->format == AV_PIX_FMT_CUDA && task->out_frame->hw_frames_ctx) {
@@ -943,7 +987,12 @@ static DNNModel *dnn_load_model_trt(DnnContext *ctx, DNNFunctionType func_type, 
             goto fail;
         }
 
-        size_t size = file.tellg();
+        std::streampos pos = file.tellg();
+        if (pos == std::streampos(-1) || pos <= 0) {
+            av_log(ctx, AV_LOG_ERROR, "Engine file is empty or unreadable: %s\n", ctx->model_filename);
+            goto fail;
+        }
+        size_t size = static_cast<size_t>(pos);
         file.seekg(0, std::ios::beg);
 
         std::vector<char> buffer(size);
@@ -1005,6 +1054,32 @@ static DNNModel *dnn_load_model_trt(DnnContext *ctx, DNNFunctionType func_type, 
             goto fail;
         }
 
+        // Validate tensor dimensions (must be 4D for NCHW format)
+        if (trt_model->input_dims.nbDims != 4) {
+            av_log(ctx, AV_LOG_ERROR, "Input tensor must be 4D (NCHW), got %d dimensions\n",
+                   trt_model->input_dims.nbDims);
+            goto fail;
+        }
+        if (trt_model->output_dims.nbDims != 4) {
+            av_log(ctx, AV_LOG_ERROR, "Output tensor must be 4D (NCHW), got %d dimensions\n",
+                   trt_model->output_dims.nbDims);
+            goto fail;
+        }
+
+        // Validate all dimensions are positive
+        for (int i = 0; i < 4; i++) {
+            if (trt_model->input_dims.d[i] <= 0) {
+                av_log(ctx, AV_LOG_ERROR, "Invalid input dimension[%d] = %ld\n",
+                       i, (long)trt_model->input_dims.d[i]);
+                goto fail;
+            }
+            if (trt_model->output_dims.d[i] <= 0) {
+                av_log(ctx, AV_LOG_ERROR, "Invalid output dimension[%d] = %ld\n",
+                       i, (long)trt_model->output_dims.d[i]);
+                goto fail;
+            }
+        }
+
         // Log dimensions
         av_log(ctx, AV_LOG_INFO, "TensorRT engine loaded:\n");
         av_log(ctx, AV_LOG_INFO, "  Input '%s': %ldx%ldx%ldx%ld\n",
@@ -1017,10 +1092,24 @@ static DNNModel *dnn_load_model_trt(DnnContext *ctx, DNNFunctionType func_type, 
                (long)trt_model->output_dims.d[2], (long)trt_model->output_dims.d[3]);
 
         // Allocate GPU buffers using Driver API
-        trt_model->input_size = trt_model->input_dims.d[0] * trt_model->input_dims.d[1] *
-                                 trt_model->input_dims.d[2] * trt_model->input_dims.d[3] * sizeof(float);
-        trt_model->output_size = trt_model->output_dims.d[0] * trt_model->output_dims.d[1] *
-                                  trt_model->output_dims.d[2] * trt_model->output_dims.d[3] * sizeof(float);
+        // Use overflow-safe multiplication for buffer size calculation
+        {
+            int64_t in_elems = (int64_t)trt_model->input_dims.d[0] * trt_model->input_dims.d[1] *
+                               trt_model->input_dims.d[2] * trt_model->input_dims.d[3];
+            int64_t out_elems = (int64_t)trt_model->output_dims.d[0] * trt_model->output_dims.d[1] *
+                                trt_model->output_dims.d[2] * trt_model->output_dims.d[3];
+
+            // Check for overflow (max reasonable GPU buffer ~16GB)
+            const int64_t max_elements = (int64_t)4 * 1024 * 1024 * 1024 / sizeof(float);
+            if (in_elems > max_elements || out_elems > max_elements) {
+                av_log(ctx, AV_LOG_ERROR, "Tensor size exceeds maximum supported (%lld elements)\n",
+                       (long long)max_elements);
+                goto fail;
+            }
+
+            trt_model->input_size = (size_t)in_elems * sizeof(float);
+            trt_model->output_size = (size_t)out_elems * sizeof(float);
+        }
 
         err = p_cuMemAlloc(&trt_model->input_buffer, trt_model->input_size);
         if (err != CUDA_SUCCESS) {

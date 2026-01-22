@@ -36,6 +36,19 @@ __global__ void hwc_uint8_to_nchw_float32_kernel(
     output[2 * hw + y * width + x] = b / 255.0f;  // B channel
 }
 
+// Helper: Clamp float to [0,255] with NaN handling and proper rounding
+__device__ __forceinline__ unsigned char float_to_uint8_safe(float val) {
+    // Handle NaN and Inf: NaN comparisons return false, so we check explicitly
+    // isfinite() returns false for NaN and Inf
+    if (!isfinite(val)) {
+        return 0;  // Default to black for corrupted values
+    }
+    // Scale, clamp, and round to nearest integer
+    val = val * 255.0f + 0.5f;  // Add 0.5 for proper rounding
+    val = fminf(fmaxf(val, 0.0f), 255.0f);
+    return (unsigned char)val;
+}
+
 // Kernel: NCHW float32 [0,1] -> HWC uint8 [0,255]
 // Input: float32 buffer in NCHW format (1, 3, height, width)
 // Output: uint8 buffer in HWC format (height, width, 3) with possible row padding
@@ -56,16 +69,12 @@ __global__ void nchw_float32_to_hwc_uint8_kernel(
     float g = input[1 * hw + y * width + x];
     float b = input[2 * hw + y * width + x];
 
-    // Clamp and scale to [0,255]
-    r = fminf(fmaxf(r * 255.0f, 0.0f), 255.0f);
-    g = fminf(fmaxf(g * 255.0f, 0.0f), 255.0f);
-    b = fminf(fmaxf(b * 255.0f, 0.0f), 255.0f);
-
     // Output: HWC with potential row padding
+    // Using safe conversion with NaN handling and proper rounding
     unsigned char* row = output + y * output_linesize;
-    row[x * 3 + 0] = (unsigned char)r;
-    row[x * 3 + 1] = (unsigned char)g;
-    row[x * 3 + 2] = (unsigned char)b;
+    row[x * 3 + 0] = float_to_uint8_safe(r);
+    row[x * 3 + 1] = float_to_uint8_safe(g);
+    row[x * 3 + 2] = float_to_uint8_safe(b);
 }
 
 // Kernel: 4-channel HWC uint8 -> NCHW float32 (extract RGB, ignore alpha)
@@ -108,14 +117,11 @@ __global__ void nchw_float32_to_hwc4_uint8_kernel(
     float g = input[1 * hw + y * width + x];
     float b = input[2 * hw + y * width + x];
 
-    r = fminf(fmaxf(r * 255.0f, 0.0f), 255.0f);
-    g = fminf(fmaxf(g * 255.0f, 0.0f), 255.0f);
-    b = fminf(fmaxf(b * 255.0f, 0.0f), 255.0f);
-
+    // Using safe conversion with NaN handling and proper rounding
     unsigned char* row = output + y * output_linesize;
-    row[x * 4 + r_offset] = (unsigned char)r;
-    row[x * 4 + g_offset] = (unsigned char)g;
-    row[x * 4 + b_offset] = (unsigned char)b;
+    row[x * 4 + r_offset] = float_to_uint8_safe(r);
+    row[x * 4 + g_offset] = float_to_uint8_safe(g);
+    row[x * 4 + b_offset] = float_to_uint8_safe(b);
     row[x * 4 + a_offset] = 255;  // Alpha = opaque
 }
 
