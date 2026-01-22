@@ -247,6 +247,7 @@ APT_PACKAGES=(
     texinfo
     unzip
     wget
+    xxd
     yasm
     libass-dev
     libbluray-dev
