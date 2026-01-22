@@ -94,6 +94,10 @@ jobs:
 
       - name: Verify image
         run: |
+          # Free space: BuildKit uses separate storage, prune it before pulling
+          docker buildx prune -af || true
+          docker system prune -af || true
+          df -h
           docker pull ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cuda${{ steps.cuda.outputs.version }}
           # Verify everything that should be enabled is actually linked
           # Note: --entrypoint bypasses the default entrypoint which tries to build TensorRT engines (requires GPU)

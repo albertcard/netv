@@ -43,7 +43,10 @@ COPY tools/ tools/
 # --break-system-packages: required for PEP 668 (Ubuntu 24.04+), doesn't exist in pip 22.0 (Ubuntu 22.04)
 RUN PIP_BSP=$(pip install --help 2>&1 | grep -q break-system-packages && echo --break-system-packages); \
     python3 -m pip install --no-cache-dir --ignore-installed $PIP_BSP . torch onnx tensorrt && \
-    python3 -c "import torch; import onnx; import tensorrt; print('AI packages verified')"
+    python3 -c "import torch; import onnx; import tensorrt; print('AI packages verified')" && \
+    # Remove Windows-only TensorRT libraries to save ~500MB
+    find /usr -name '*_win_*.so*' -delete 2>/dev/null || true && \
+    find /usr -name '*_win.so*' -delete 2>/dev/null || true
 
 # Runtime config
 EXPOSE 8000
